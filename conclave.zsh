@@ -24,7 +24,7 @@ SPINNER_INDEX=1
 
 # Default configuration
 REPO_LIMIT=10000
-ORG_NAME="legalzoom"
+ORG_NAME=""
 SCRIPT_DIR="${0:A:h}"  # Directory where this script lives
 REPOS_DIR="$SCRIPT_DIR/.repos"
 PARALLEL_JOBS=10
@@ -61,7 +61,7 @@ show_help() {
     echo "Discovers and runs all Guild Member tools against repositories."
     echo ""
     echo "Options:"
-    echo "  -n <org>        Organization name (default: legalzoom)"
+    echo "  -o <org>        Organization name (default: your GitHub user)"
     echo "  -l <number>     Limit number of repos to fetch (default: 10000)"
     echo "  -j <number>     Number of parallel jobs (default: 10)"
     echo "  -a              Scan all text files (overrides per-tool config)"
@@ -259,7 +259,7 @@ while [[ $# -gt 0 ]]; do
         -h|--help)
             show_help
             ;;
-        -n)
+        -o)
             if [[ -z "$2" ]]; then
                 echo "${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} -n requires an organization name"
                 exit 1
@@ -337,7 +337,17 @@ if [[ -n "$REPO_LIST" ]]; then
     repos=$(printf "%s\n" "${repo_array[@]}")
     echo "${BLUE_COLOR}Processing specified repositories...${RESET_COLOR}"
 else
-    echo "${BLUE_COLOR}Fetching repositories from ${MAGENTA_COLOR}${ORG_NAME}${RESET_COLOR} (limit: ${REPO_LIMIT})...${RESET_COLOR}"
+    # If no org specified, use the authenticated user's repos
+    if [[ -z "$ORG_NAME" ]]; then
+        ORG_NAME=$(gh api user -q '.login' 2>/dev/null)
+        if [[ -z "$ORG_NAME" ]]; then
+            echo "${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} Could not determine GitHub user. Use -n to specify an org."
+            exit 1
+        fi
+        echo "${BLUE_COLOR}Fetching your repositories (${MAGENTA_COLOR}${ORG_NAME}${RESET_COLOR}) (limit: ${REPO_LIMIT})...${RESET_COLOR}"
+    else
+        echo "${BLUE_COLOR}Fetching repositories from ${MAGENTA_COLOR}${ORG_NAME}${RESET_COLOR} (limit: ${REPO_LIMIT})...${RESET_COLOR}"
+    fi
     repos=$(gh repo list "$ORG_NAME" --limit "$REPO_LIMIT" --archived=false --json nameWithOwner -q '.[].nameWithOwner' 2>/dev/null)
 fi
 

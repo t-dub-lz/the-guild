@@ -6,14 +6,17 @@ various specialized scanning tools ("Guild Members") to them.
 ## Quick Start
 
 ```bash
+# Scan all your own GitHub repos (default)
+./conclave.zsh
+
 # Scan all repos in an org
-./conclave.zsh -n myorg
+./conclave.zsh -o myorg
 
 # Scan specific repos
 ./conclave.zsh org/repo1,org/repo2
 
 # Scan with 20 parallel jobs
-./conclave.zsh -n myorg -j 20
+./conclave.zsh -o myorg -j 20
 ```
 
 ## Usage
@@ -22,7 +25,7 @@ various specialized scanning tools ("Guild Members") to them.
 conclave.zsh [OPTIONS] [repo1,repo2,...]
 
 Options:
-  -n <org>      Organization name (default: legalzoom)
+  -o <org>      Organization name (default: your GitHub user)
   -l <number>   Limit number of repos to fetch (default: 10000)
   -j <number>   Number of parallel jobs (default: 10)
   -a            Scan all text files (overrides per-tool config)
@@ -75,8 +78,11 @@ Each tool requires a `config.json` file:
 Tools receive a file path as the first argument and should:
 - Exit `0` if the file is clean / passes inspection
 - Exit `1` if the file has issues
-- Support `-nn` flag for quiet mode (no output, just exit code)
-- Support `-d` flag for detailed output
+- Exit `2` to indicate that the tool itself encountered an error
+- Support `-n` flag for no output to stdout, only stderr
+- Support `-nn` flag for no output at all (to either stdout or stderr)
+- Support `-d` flag for details ONLY (omitting header/footer output that might
+  happen in "regular" standalone operation)
 - Support `--prefix="..."` for indented output
 
 ### Repository Cache (.repos/)
