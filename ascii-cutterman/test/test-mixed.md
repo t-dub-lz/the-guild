@@ -1,0 +1,1 @@
+This hаs а Cyrillic а and a non-breaking space
