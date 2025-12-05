@@ -1,0 +1,6 @@
+{
+  "name": "Secretary",
+  "description": "Flags files exceeding 10,000 lines of code",
+  "patterns": ["*"],
+  "scanAllText": true
+}
