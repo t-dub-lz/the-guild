@@ -215,14 +215,14 @@ find_files_for_tool() {
     local files=()
 
     if [[ "$SCAN_ALL_OVERRIDE" == true ]] || tool_scans_all_text "$tool_name"; then
-        # Scan all text files
+        # Scan all text files (excluding .git)
         while IFS= read -r -d '' file; do
             if file --mime "$file" 2>/dev/null | grep -q "text/"; then
                 files+=("$file")
             fi
-        done < <(find "$repo_path" -type f -print0 2>/dev/null)
+        done < <(find "$repo_path" -type f -not -path "*/.git/*" -print0 2>/dev/null)
     else
-        # Use tool's patterns
+        # Use tool's patterns (excluding .git)
         local patterns=()
         while IFS= read -r pattern; do
             [[ -n "$pattern" ]] && patterns+=("$pattern")
@@ -246,7 +246,7 @@ find_files_for_tool() {
 
         while IFS= read -r -d '' file; do
             files+=("$file")
-        done < <(find "$repo_path" -type f \( "${find_args[@]}" \) -print0 2>/dev/null)
+        done < <(find "$repo_path" -type f -not -path "*/.git/*" \( "${find_args[@]}" \) -print0 2>/dev/null)
     fi
 
     printf '%s\0' "${files[@]}"
@@ -323,7 +323,7 @@ if [[ ${#tools_list[@]} -eq 0 ]]; then
     exit 1
 fi
 
-echo "Guild Member(s) ${SUCCESS_COLOR}${CHECKMARK}${RESET_COLOR}Assembled:${BLUE_COLOR}${#tools_list[@]}${RESET_COLOR}"
+echo "${SUCCESS_COLOR}${CHECKMARK}${RESET_COLOR} Guild Member(s) Assembled: ${BLUE_COLOR}${#tools_list[@]}${RESET_COLOR}"
 for tool in "${tools_list[@]}"; do
     local tool_display_name=$(get_tool_config "$tool" "name")
     [[ -z "$tool_display_name" ]] && tool_display_name="$tool"
@@ -547,7 +547,7 @@ fi
 
 # Show per-tool stats
 echo ""
-echo "${CYAN_COLOR}Issues by Guild Member:${RESET_COLOR}"
+echo "${CYAN_COLOR}Indictments Of The Conclave:${RESET_COLOR}"
 for tool in "${tools_list[@]}"; do
     local tool_display_name=$(get_tool_config "$tool" "name")
     [[ -z "$tool_display_name" ]] && tool_display_name="$tool"

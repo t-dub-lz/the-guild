@@ -115,8 +115,8 @@ in text files. Useful for finding:
 
 ### Secretary
 
-Reports file statistics (lines, words, characters). A simple demonstration
-tool showing the multi-tool architecture.
+Flags files exceeding 5,000 lines of code. Useful for identifying overly
+large files that may need refactoring.
 
 **Patterns**: All text files (`scanAllText: true`)
 
