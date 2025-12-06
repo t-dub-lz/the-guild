@@ -507,14 +507,14 @@ function main() {
           }
 
           if (invisibleReplacements.size > 0) {
-            stderr.write(`${linePrefix}${YELLOW_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} Invisible formatting characters replaced:\n`);
+            stderr.write(`${linePrefix}${YELLOW_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} Invisible formatting characters detected:\n`);
             invisibleReplacements.forEach((info, char) => {
               stderr.write(`${linePrefix}    ${char} (${info.name}): ${BLUE_COLOR}${info.count}${RESET_COLOR} occurrence${info.count > 1 ? 's' : ''}\n`);
             });
           }
 
           if (homoglyphReplacements.size > 0) {
-            stderr.write(`${linePrefix}${YELLOW_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} Homoglyphs replaced with ASCII equivalents:\n`);
+            stderr.write(`${linePrefix}${YELLOW_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} Homoglyphs detected:\n`);
             homoglyphReplacements.forEach((info, char) => {
               stderr.write(`${linePrefix}    ${char} (${info.name}): ${BLUE_COLOR}${info.count}${RESET_COLOR} occurrence${info.count > 1 ? 's' : ''}\n`);
             });
