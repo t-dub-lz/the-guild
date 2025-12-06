@@ -1,3 +1,2 @@
 # Repository cache - managed by conclave.zsh
 .repos/*
-!.repos/README.md
