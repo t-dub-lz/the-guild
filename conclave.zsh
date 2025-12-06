@@ -381,24 +381,24 @@ while IFS= read -r repo; do
     echo "${BLUE_COLOR}════════════════════════════════════════${RESET_COLOR}"
 
     # Sync repository (clone or pull)
-    sync_pid=$$
+    local sync_result_file=$(mktemp)
 
-    # Show spinner while syncing
-    (
-        result=$(sync_repo "$repo")
-        echo "$result"
-    ) &
+    # Run sync in background, capture result to temp file
+    (sync_repo "$repo" > "$sync_result_file") &
     sync_pid=$!
 
+    # Show spinner immediately, then update in loop
+    printf "${NEON_GREEN}${SPINNER_FRAMES[$SPINNER_INDEX]}${RESET_COLOR} Syncing repository..."
     while kill -0 "$sync_pid" 2>/dev/null; do
-        printf "\r${NEON_GREEN}${SPINNER_FRAMES[$SPINNER_INDEX]}${RESET_COLOR} Syncing repository..."
-        SPINNER_INDEX=$(( SPINNER_INDEX % ${#SPINNER_FRAMES[@]} + 1 ))
         sleep 0.1
+        SPINNER_INDEX=$(( SPINNER_INDEX % ${#SPINNER_FRAMES[@]} + 1 ))
+        printf "\r${NEON_GREEN}${SPINNER_FRAMES[$SPINNER_INDEX]}${RESET_COLOR} Syncing repository..."
     done
 
     wait "$sync_pid"
-    sync_result=$(sync_repo "$repo")
     clear_spinner
+    sync_result=$(cat "$sync_result_file")
+    rm -f "$sync_result_file"
 
     # Handle sync result
     local org="${repo%/*}"
@@ -445,11 +445,26 @@ while IFS= read -r repo; do
         echo ""
         echo "${CYAN_COLOR}Running: ${tool_display_name}${RESET_COLOR}"
 
-        # Find files for this tool
+        # Find files for this tool (with spinner for slow operations)
         local files=()
+        local files_temp=$(mktemp)
+
+        (find_files_for_tool "$tool" "$repo_path" > "$files_temp") &
+        local find_pid=$!
+
+        printf "${NEON_GREEN}${SPINNER_FRAMES[$SPINNER_INDEX]}${RESET_COLOR} Finding files..."
+        while kill -0 "$find_pid" 2>/dev/null; do
+            sleep 0.1
+            SPINNER_INDEX=$(( SPINNER_INDEX % ${#SPINNER_FRAMES[@]} + 1 ))
+            printf "\r${NEON_GREEN}${SPINNER_FRAMES[$SPINNER_INDEX]}${RESET_COLOR} Finding files..."
+        done
+        wait "$find_pid"
+        clear_spinner
+
         while IFS= read -r -d '' file; do
             [[ -n "$file" ]] && files+=("$file")
-        done < <(find_files_for_tool "$tool" "$repo_path")
+        done < "$files_temp"
+        rm -f "$files_temp"
 
         local total_files=${#files[@]}
         ((total_files_scanned += total_files))
@@ -477,10 +492,12 @@ while IFS= read -r repo; do
 
         xargs_pid=$!
 
+        # Show spinner immediately, then update in loop
+        printf "${NEON_GREEN}${SPINNER_FRAMES[$SPINNER_INDEX]}${RESET_COLOR} Scanning ${BLUE_COLOR}${total_files}${RESET_COLOR} files..."
         while kill -0 "$xargs_pid" 2>/dev/null; do
-            printf "\r${NEON_GREEN}${SPINNER_FRAMES[$SPINNER_INDEX]}${RESET_COLOR} Scanning ${BLUE_COLOR}${total_files}${RESET_COLOR} files..."
-            SPINNER_INDEX=$(( SPINNER_INDEX % ${#SPINNER_FRAMES[@]} + 1 ))
             sleep 0.1
+            SPINNER_INDEX=$(( SPINNER_INDEX % ${#SPINNER_FRAMES[@]} + 1 ))
+            printf "\r${NEON_GREEN}${SPINNER_FRAMES[$SPINNER_INDEX]}${RESET_COLOR} Scanning ${BLUE_COLOR}${total_files}${RESET_COLOR} files..."
         done
 
         wait "$xargs_pid"
