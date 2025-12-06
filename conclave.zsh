@@ -443,7 +443,7 @@ while IFS= read -r repo; do
         [[ -z "$tool_display_name" ]] && tool_display_name="$tool"
 
         echo ""
-        echo "${CYAN_COLOR}Running: ${tool_display_name}${RESET_COLOR}"
+        echo "${CYAN_COLOR}Consulting ${tool_display_name}${RESET_COLOR}"
 
         # Find files for this tool (with spinner for slow operations)
         local files=()
