@@ -420,6 +420,20 @@ function parseArgs(args: string[]): {
     } else if (arg === '-h' || arg === '--help') {
       result.help = true;
       i++;
+    } else if (arg === '-g') {
+      // Sigil flag - accept and ignore (no implementation yet)
+      if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
+        i += 2;  // Skip -g and its value
+      } else {
+        i++;     // Skip -g only
+      }
+    } else if (arg === '-r') {
+      // Report flag - accept and ignore (no implementation yet)
+      if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
+        i += 2;  // Skip -r and its value
+      } else {
+        i++;     // Skip -r only
+      }
     } else if (!arg.startsWith('-')) {
       if (result.filename) {
         stderr.write(`${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} Too many arguments\n`);

@@ -31,6 +31,9 @@ PARALLEL_JOBS=10
 STRICTNESS_FLAG=""
 SCAN_ALL_OVERRIDE=false  # -a flag overrides per-tool config
 
+# Generate unique sigil (UUID) for this session
+SIGIL=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || date +%s%N | sha256sum | cut -c1-36)
+
 # Cleanup function
 cleanup() {
     echo ""
@@ -482,13 +485,13 @@ while IFS= read -r repo; do
         # Run parallel checks
         printf '%s\0' "${files[@]}" | xargs -0 -P "$PARALLEL_JOBS" -I {} bash -c '
             exit_code=0
-            "$1" $2 -nn "{}" 2>/dev/null || exit_code=$?
+            "$1" $2 -g "$3" -nn "{}" 2>/dev/null || exit_code=$?
 
             if [[ $exit_code -eq 1 ]]; then
-                issues=$("$1" $2 -d --prefix="    " "{}" 2>&1)
+                issues=$("$1" $2 -g "$3" -d --prefix="    " "{}" 2>&1)
                 printf "PROBLEM:%s|||%s\n" "{}" "$issues"
             fi
-        ' _ "$tool_exe" "$STRICTNESS_FLAG" > "$temp_results" 2>/dev/null &
+        ' _ "$tool_exe" "$STRICTNESS_FLAG" "$SIGIL" > "$temp_results" 2>/dev/null &
 
         xargs_pid=$!
 
@@ -543,10 +546,30 @@ while IFS= read -r repo; do
 
 done <<< "$repos"
 
+# Generate member testaments (reports)
+echo ""
+echo "${BLUE_COLOR}════════════════════════════════════════${RESET_COLOR}"
+echo "${BLUE_COLOR}MEMBERS TESTAMENTS${RESET_COLOR}"
+echo "${BLUE_COLOR}════════════════════════════════════════${RESET_COLOR}"
+
+for tool in "${tools_list[@]}"; do
+    local tool_exe=$(get_tool_executable "$tool")
+    local tool_display_name=$(get_tool_config "$tool" "name")
+    [[ -z "$tool_display_name" ]] && tool_display_name="$tool"
+
+    local report_output=$("$tool_exe" $STRICTNESS_FLAG -r "$SIGIL" 2>&1)
+
+    if [[ -n "$report_output" ]]; then
+        echo ""
+        echo "${CYAN_COLOR}${tool_display_name}:${RESET_COLOR}"
+        echo "$report_output"
+    fi
+done
+
 # Final summary
 echo ""
 echo "${BLUE_COLOR}════════════════════════════════════════${RESET_COLOR}"
-echo "${BLUE_COLOR}FINAL SUMMARY${RESET_COLOR}"
+echo "${BLUE_COLOR}FINAL DECISION${RESET_COLOR}"
 echo "${BLUE_COLOR}════════════════════════════════════════${RESET_COLOR}"
 echo ""
 echo "${YELLOW_COLOR}Total repositories scanned:${RESET_COLOR} ${BLUE_COLOR}${total_repos}${RESET_COLOR}"
