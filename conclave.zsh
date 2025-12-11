@@ -379,9 +379,12 @@ while IFS= read -r repo; do
     ((total_repos++))
 
     echo ""
-    echo "${BLUE_COLOR}════════════════════════════════════════${RESET_COLOR}"
+    local header_text="Repository: ${repo}"
+    local header_len=${#header_text}
+    local separator_line="${(l:$header_len::═:)}"
+    echo "${BLUE_COLOR}${separator_line}${RESET_COLOR}"
     echo "${BLUE_COLOR}Repository: ${MAGENTA_COLOR}${repo}${RESET_COLOR}"
-    echo "${BLUE_COLOR}════════════════════════════════════════${RESET_COLOR}"
+    echo "${BLUE_COLOR}${separator_line}${RESET_COLOR}"
 
     # Sync repository (clone or pull)
     local sync_result_file=$(mktemp)
@@ -548,9 +551,9 @@ done <<< "$repos"
 
 # Generate member testaments (reports)
 echo ""
-echo "${BLUE_COLOR}════════════════════════════════════════${RESET_COLOR}"
-echo "${BLUE_COLOR}MEMBERS TESTAMENTS${RESET_COLOR}"
-echo "${BLUE_COLOR}════════════════════════════════════════${RESET_COLOR}"
+echo "${BLUE_COLOR}═════════════════════════════════════════════════════════════════════════════════${RESET_COLOR}"
+echo "${BLUE_COLOR}                              MEMBERS' TESTAMENTS${RESET_COLOR}"
+echo "${BLUE_COLOR}═════════════════════════════════════════════════════════════════════════════════${RESET_COLOR}"
 
 for tool in "${tools_list[@]}"; do
     local tool_exe=$(get_tool_executable "$tool")
@@ -568,9 +571,9 @@ done
 
 # Final summary
 echo ""
-echo "${BLUE_COLOR}════════════════════════════════════════${RESET_COLOR}"
-echo "${BLUE_COLOR}FINAL DECISION${RESET_COLOR}"
-echo "${BLUE_COLOR}════════════════════════════════════════${RESET_COLOR}"
+echo "${BLUE_COLOR}═════════════════════════════════════════════════════════════════════════════════${RESET_COLOR}"
+echo "${BLUE_COLOR}                                FINAL DECISION${RESET_COLOR}"
+echo "${BLUE_COLOR}═════════════════════════════════════════════════════════════════════════════════${RESET_COLOR}"
 echo ""
 echo "${YELLOW_COLOR}Total repositories scanned:${RESET_COLOR} ${BLUE_COLOR}${total_repos}${RESET_COLOR}"
 echo "${YELLOW_COLOR}Total files scanned:${RESET_COLOR} ${BLUE_COLOR}${total_files_scanned}${RESET_COLOR}"
