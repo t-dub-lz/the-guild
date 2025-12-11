@@ -1,8 +1,12 @@
 #!/usr/bin/env -S npx tsx
 
-import { readFileSync, writeFileSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, appendFileSync, unlinkSync } from "fs";
 import { argv, exit, stderr, stdout } from "process";
 import { isatty } from "tty";
+import { tmpdir } from "os";
+import { join } from "path";
+
+const TOOL_NAME = "ascii-cutterman";
 
 const CHECKMARK = '\u2713';
 const XMARK = '\u2717';
@@ -327,6 +331,71 @@ function cleanContent(content: string, strictness: number = 0): {
   return { cleaned, invisibleReplacements, homoglyphReplacements, smugglingSequencesRemoved, smugglingCharactersRemoved, hiddenTexts };
 }
 
+// Sigil data file helpers
+function getDataFilePath(sigil: string): string {
+  return join(tmpdir(), `guild-${TOOL_NAME}-${sigil}.dat`);
+}
+
+function extractRepoFromPath(filepath: string): string {
+  const match = filepath.match(/\.repos\/([^/]+\/[^/]+)\//);
+  return match ? match[1] : "unknown";
+}
+
+function recordData(sigil: string, filepath: string, hasSmugglingIssues: boolean): void {
+  const dataFile = getDataFilePath(sigil);
+  const repo = extractRepoFromPath(filepath);
+  // Format: repo|has_smuggling (1 or 0)
+  const record = `${repo}|${hasSmugglingIssues ? 1 : 0}\n`;
+  appendFileSync(dataFile, record);
+}
+
+function generateReport(sigil: string): string {
+  const dataFile = getDataFilePath(sigil);
+  if (!existsSync(dataFile)) {
+    return "";
+  }
+
+  const content = readFileSync(dataFile, 'utf-8');
+  const lines = content.trim().split('\n').filter(l => l);
+
+  const repoStats = new Map<string, { total: number; smuggling: number }>();
+
+  for (const line of lines) {
+    const [repo, smugglingFlag] = line.split('|');
+    if (!repoStats.has(repo)) {
+      repoStats.set(repo, { total: 0, smuggling: 0 });
+    }
+    const stats = repoStats.get(repo)!;
+    stats.total++;
+    if (smugglingFlag === '1') {
+      stats.smuggling++;
+    }
+  }
+
+  const totalRepos = repoStats.size;
+  let totalFiles = 0;
+  let totalSmuggling = 0;
+
+  for (const stats of repoStats.values()) {
+    totalFiles += stats.total;
+    totalSmuggling += stats.smuggling;
+  }
+
+  // Cleanup
+  unlinkSync(dataFile);
+
+  if (totalRepos === 0) return "";
+
+  const avgFilesPerRepo = Math.round(totalFiles / totalRepos);
+
+  let report = `  Repos analyzed: ${totalRepos}\n`;
+  report += `  Total files scanned: ${totalFiles}\n`;
+  report += `  Average files per repo: ${avgFilesPerRepo}\n`;
+  report += `  Files with smuggling detected: ${totalSmuggling}`;
+
+  return report;
+}
+
 function usage() {
   stderr.write(`Usage: ascii-cutterman [-s|-S] [-i] [-o output.md] [-n|-nn|-d] <filename>
 
@@ -370,6 +439,8 @@ function parseArgs(args: string[]): {
   silent: boolean;
   detailsOnly: boolean;
   prefix?: string;
+  sigil?: string;
+  reportMode: boolean;
 } {
   const result = {
     filename: undefined as string | undefined,
@@ -380,7 +451,9 @@ function parseArgs(args: string[]): {
     noOutput: false,
     silent: false,
     detailsOnly: false,
-    prefix: undefined as string | undefined
+    prefix: undefined as string | undefined,
+    sigil: undefined as string | undefined,
+    reportMode: false
   };
 
   let i = 2;
@@ -421,18 +494,21 @@ function parseArgs(args: string[]): {
       result.help = true;
       i++;
     } else if (arg === '-g') {
-      // Sigil flag - accept and ignore (no implementation yet)
+      // Sigil flag - for grouping runs and data collection
       if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
-        i += 2;  // Skip -g and its value
+        result.sigil = args[i + 1];
+        i += 2;
       } else {
-        i++;     // Skip -g only
+        i++;
       }
     } else if (arg === '-r') {
-      // Report flag - accept and ignore (no implementation yet)
+      // Report flag - generate report for sigil
       if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
-        i += 2;  // Skip -r and its value
+        result.sigil = args[i + 1];
+        result.reportMode = true;
+        i += 2;
       } else {
-        i++;     // Skip -r only
+        i++;
       }
     } else if (!arg.startsWith('-')) {
       if (result.filename) {
@@ -457,6 +533,15 @@ function main() {
 
   if (options.help) {
     usage();
+    exit(0);
+  }
+
+  // Handle report mode - no filename needed
+  if (options.reportMode && options.sigil) {
+    const report = generateReport(options.sigil);
+    if (report) {
+      stdout.write(report + '\n');
+    }
     exit(0);
   }
 
@@ -588,6 +673,11 @@ function main() {
           }
         }
       }
+    }
+
+    // Record data if sigil provided
+    if (options.sigil) {
+      recordData(options.sigil, options.filename!, smugglingCharactersRemoved > 0);
     }
 
     // Exit with appropriate code

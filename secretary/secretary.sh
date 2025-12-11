@@ -149,8 +149,6 @@ if [[ "$REPORT_MODE" == true ]]; then
         avg_files=$((total_files / total_repos))
         avg_size=$((total_size / total_files))
 
-        echo "  Repos analyzed: ${total_repos}"
-        echo "  Total files scanned: ${total_files}"
         echo "  Average files per repo: ${avg_files}"
         echo "  Average file size: ${avg_size} bytes"
         echo "  Files over ${LINE_THRESHOLD} lines: ${total_over}"
