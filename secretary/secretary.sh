@@ -14,7 +14,7 @@
 #   1 = file has issues (over threshold)
 #   2 = tool error
 
-LINE_THRESHOLD=5000
+LINE_THRESHOLD=10000
 QUIET=false
 SILENT=false
 DETAILS_ONLY=false
