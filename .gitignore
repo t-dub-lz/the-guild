@@ -1,5 +1,7 @@
 # Repository cache - managed by conclave.zsh
 .repos/*
+
+# Node modules in members
 **/node_modules
 
 # Environment variables (secrets)

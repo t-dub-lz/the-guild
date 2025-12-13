@@ -34,6 +34,42 @@ SCAN_ALL_OVERRIDE=false  # -a flag overrides per-tool config
 # Generate unique sigil (UUID) for this session
 SIGIL=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || date +%s%N | sha256sum | cut -c1-36)
 
+# Load environment variables from .env file if it exists
+# This allows Guild members to access secrets like OPENAI_API_KEY
+load_env_file() {
+    local env_file="$SCRIPT_DIR/.env"
+
+    if [[ -f "$env_file" ]]; then
+        # Read .env file line by line
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            # Skip empty lines and comments
+            [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+
+            # Remove leading/trailing whitespace
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+
+            # Skip if not a valid KEY=value format
+            [[ "$line" != *=* ]] && continue
+
+            # Extract key and value
+            local key="${line%%=*}"
+            local value="${line#*=}"
+
+            # Remove surrounding quotes from value if present
+            if [[ "$value" =~ ^\"(.*)\"$ ]] || [[ "$value" =~ ^\'(.*)\'$ ]]; then
+                value="${match[1]}"
+            fi
+
+            # Export the variable
+            export "$key=$value"
+        done < "$env_file"
+    fi
+}
+
+# Load .env before any tool invocations
+load_env_file
+
 # Cleanup function
 cleanup() {
     echo ""
@@ -486,13 +522,15 @@ while IFS= read -r repo; do
         local temp_results=$(mktemp)
 
         # Run parallel checks
+        # Use null byte (\0) as record separator to handle multi-line tool output
         printf '%s\0' "${files[@]}" | xargs -0 -P "$PARALLEL_JOBS" -I {} bash -c '
             exit_code=0
             "$1" $2 -g "$3" -nn "{}" 2>/dev/null || exit_code=$?
 
             if [[ $exit_code -eq 1 ]]; then
                 issues=$("$1" $2 -g "$3" -d --prefix="    " "{}" 2>&1)
-                printf "PROBLEM:%s|||%s\n" "{}" "$issues"
+                # Use null byte as record separator to preserve multi-line issues
+                printf "PROBLEM:%s|||%s\0" "{}" "$issues"
             fi
         ' _ "$tool_exe" "$STRICTNESS_FLAG" "$SIGIL" > "$temp_results" 2>/dev/null &
 
@@ -509,10 +547,10 @@ while IFS= read -r repo; do
         wait "$xargs_pid"
         clear_spinner
 
-        # Parse results
-        while IFS= read -r line; do
-            if [[ "$line" == PROBLEM:* ]]; then
-                local rest="${line#PROBLEM:}"
+        # Parse results - use null byte as record delimiter to handle multi-line issues
+        while IFS= read -r -d '' record; do
+            if [[ "$record" == PROBLEM:* ]]; then
+                local rest="${record#PROBLEM:}"
                 local file="${rest%%|||*}"
                 local issues="${rest#*|||}"
                 problem_files+=("$file")
