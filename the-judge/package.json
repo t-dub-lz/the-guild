@@ -1,0 +1,14 @@
+{
+  "name": "the-judge",
+  "version": "1.0.0",
+  "description": "AI agent instruction file analyzer for the Guild",
+  "type": "module",
+  "dependencies": {
+    "openai": "^4.77.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.0.0"
+  }
+}

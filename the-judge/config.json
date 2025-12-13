@@ -1,0 +1,30 @@
+{
+  "name": "The Judge",
+  "description": "Analyzes AI agent instruction files for security, verbosity, and clarity using OpenAI",
+  "patterns": [
+    ".cursorrules",
+    ".cursorrc",
+    "AGENTS.md",
+    ".github/AGENTS.md",
+    "CLAUDE.md",
+    ".claude/*",
+    ".claude/settings.json",
+    ".claude/commands/*",
+    ".gemini/*",
+    "copilot-instructions.md",
+    ".github/copilot-instructions.md",
+    "AI_INSTRUCTIONS.md",
+    ".aiconfig",
+    ".aiconfig.json",
+    ".aiconfig.yaml",
+    ".assistant-config",
+    ".aider*",
+    ".continue/*",
+    "CODEIUM.md",
+    ".windsurf/*",
+    ".tabnine*",
+    ".cody/*",
+    "CODING_GUIDELINES.md"
+  ],
+  "scanAllText": false
+}
