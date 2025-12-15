@@ -30,6 +30,7 @@ REPOS_DIR="$SCRIPT_DIR/.repos"
 PARALLEL_JOBS=10
 STRICTNESS_FLAG=""
 SCAN_ALL_OVERRIDE=false  # -a flag overrides per-tool config
+DRYRUN=false             # -n flag for guild training mode (counts files only)
 
 # Generate unique sigil (UUID) for this session
 SIGIL=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || date +%s%N | sha256sum | cut -c1-36)
@@ -104,7 +105,8 @@ show_help() {
     echo "  -l <number>     Limit number of repos to fetch (default: 10000)"
     echo "  -j <number>     Number of parallel jobs (default: 10)"
     echo "  -a              Scan all text files (overrides per-tool config)"
-    echo "  -s              Strict mode (passed to tools that support it)"
+    echo "  -n              Guild training - count files without running analysis"
+    echo "  -s              Strict mode"
     echo "  -S              Super strict mode"
     echo "  -h, --help      Show this help message"
     echo ""
@@ -326,6 +328,10 @@ while [[ $# -gt 0 ]]; do
             SCAN_ALL_OVERRIDE=true
             shift
             ;;
+        -n)
+            DRYRUN=true
+            shift
+            ;;
         -s)
             STRICTNESS_FLAG="-s"
             shift
@@ -402,10 +408,12 @@ total_files_scanned=0
 declare -A repo_issues       # repo -> "count:file1|file2|..."
 declare -A orphan_repos      # track orphaned repos
 declare -A tool_stats        # tool -> "issues_count"
+declare -A tool_file_counts  # tool -> "files_to_check" (for guild training)
 
 # Initialize tool stats
 for tool in "${tools_list[@]}"; do
     tool_stats["$tool"]=0
+    tool_file_counts["$tool"]=0
 done
 
 # Process each repository
@@ -516,6 +524,13 @@ while IFS= read -r repo; do
             continue
         fi
 
+        # In guild training mode, just report the count and skip actual analysis
+        if [[ "$DRYRUN" == true ]]; then
+            tool_file_counts["$tool"]=$((tool_file_counts["$tool"] + total_files))
+            echo "${CYAN_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} Files to check: ${BLUE_COLOR}${total_files}${RESET_COLOR}"
+            continue
+        fi
+
         # Check files with tool in parallel
         local problem_files=()
         declare -A file_issues
@@ -587,35 +602,53 @@ while IFS= read -r repo; do
 
 done <<< "$repos"
 
-# Generate member testaments (reports)
-echo ""
-echo "${BLUE_COLOR}═════════════════════════════════════════════════════════════════════════════════${RESET_COLOR}"
-echo "${BLUE_COLOR}                              MEMBERS' TESTAMENTS${RESET_COLOR}"
-echo "${BLUE_COLOR}═════════════════════════════════════════════════════════════════════════════════${RESET_COLOR}"
+# Generate member testaments (reports) - skip in dryrun mode
+if [[ "$DRYRUN" != true ]]; then
+    echo ""
+    echo "${BLUE_COLOR}═════════════════════════════════════════════════════════════════════════════════${RESET_COLOR}"
+    echo "${BLUE_COLOR}                              MEMBERS' TESTAMENTS${RESET_COLOR}"
+    echo "${BLUE_COLOR}═════════════════════════════════════════════════════════════════════════════════${RESET_COLOR}"
 
-for tool in "${tools_list[@]}"; do
-    local tool_exe=$(get_tool_executable "$tool")
-    local tool_display_name=$(get_tool_config "$tool" "name")
-    [[ -z "$tool_display_name" ]] && tool_display_name="$tool"
+    for tool in "${tools_list[@]}"; do
+        local tool_exe=$(get_tool_executable "$tool")
+        local tool_display_name=$(get_tool_config "$tool" "name")
+        [[ -z "$tool_display_name" ]] && tool_display_name="$tool"
 
-    local report_output=$("$tool_exe" $STRICTNESS_FLAG -r "$SIGIL" 2>&1)
+        local report_output=$("$tool_exe" $STRICTNESS_FLAG -r "$SIGIL" 2>&1)
 
-    if [[ -n "$report_output" ]]; then
-        echo ""
-        echo "${CYAN_COLOR}${tool_display_name}:${RESET_COLOR}"
-        echo "$report_output"
-    fi
-done
+        if [[ -n "$report_output" ]]; then
+            echo ""
+            echo "${CYAN_COLOR}${tool_display_name}:${RESET_COLOR}"
+            echo "$report_output"
+        fi
+    done
+fi
 
 # Final summary
 echo ""
 echo "${BLUE_COLOR}═════════════════════════════════════════════════════════════════════════════════${RESET_COLOR}"
-echo "${BLUE_COLOR}                                FINAL DECISION${RESET_COLOR}"
+if [[ "$DRYRUN" == true ]]; then
+    echo "${BLUE_COLOR}                            GUILD TRAINING SUMMARY${RESET_COLOR}"
+else
+    echo "${BLUE_COLOR}                                FINAL DECISION${RESET_COLOR}"
+fi
 echo "${BLUE_COLOR}═════════════════════════════════════════════════════════════════════════════════${RESET_COLOR}"
 echo ""
-echo "${YELLOW_COLOR}Total repositories scanned:${RESET_COLOR} ${BLUE_COLOR}${total_repos}${RESET_COLOR}"
-echo "${YELLOW_COLOR}Total files scanned:${RESET_COLOR} ${BLUE_COLOR}${total_files_scanned}${RESET_COLOR}"
-echo "${YELLOW_COLOR}Repositories with issues:${RESET_COLOR} ${BLUE_COLOR}${repos_with_issues}${RESET_COLOR}"
+echo "${YELLOW_COLOR}Total repositories synced:${RESET_COLOR} ${BLUE_COLOR}${total_repos}${RESET_COLOR}"
+if [[ "$DRYRUN" == true ]]; then
+    echo "${YELLOW_COLOR}Total files to scan:${RESET_COLOR} ${BLUE_COLOR}${total_files_scanned}${RESET_COLOR}"
+    echo ""
+    echo "${CYAN_COLOR}Files per Guild Member:${RESET_COLOR}"
+    for tool in "${tools_list[@]}"; do
+        local tool_display_name=$(get_tool_config "$tool" "name")
+        [[ -z "$tool_display_name" ]] && tool_display_name="$tool"
+        local file_count=${tool_file_counts["$tool"]}
+        echo "  ${MAGENTA_COLOR}${tool_display_name}:${RESET_COLOR} ${BLUE_COLOR}${file_count}${RESET_COLOR} files"
+    done
+else
+    echo "${YELLOW_COLOR}Total files scanned:${RESET_COLOR} ${BLUE_COLOR}${total_files_scanned}${RESET_COLOR}"
+    echo "${YELLOW_COLOR}Repositories with issues:${RESET_COLOR} ${BLUE_COLOR}${repos_with_issues}${RESET_COLOR}"
+fi
 
 # Show orphaned repos if any
 if [[ ${#orphan_repos[@]} -gt 0 ]]; then
@@ -626,25 +659,30 @@ if [[ ${#orphan_repos[@]} -gt 0 ]]; then
     done
 fi
 
-# Show per-tool stats
-echo ""
-echo "${CYAN_COLOR}Indictments Of The Conclave:${RESET_COLOR}"
-for tool in "${tools_list[@]}"; do
-    local tool_display_name=$(get_tool_config "$tool" "name")
-    [[ -z "$tool_display_name" ]] && tool_display_name="$tool"
-    local count=${tool_stats["$tool"]}
-    if [[ $count -eq 0 ]]; then
-        echo "  ${SUCCESS_COLOR}${CHECKMARK}${RESET_COLOR} ${tool_display_name}: ${BLUE_COLOR}0${RESET_COLOR} issues"
-    else
-        echo "  ${FAIL_COLOR}${XMARK}${RESET_COLOR} ${tool_display_name}: ${BLUE_COLOR}${count}${RESET_COLOR} issues"
-    fi
-done
-
-echo ""
-if [[ $repos_with_issues -eq 0 ]]; then
-    echo "${SUCCESS_COLOR}${CHECKMARK} All repositories are clean!${RESET_COLOR}"
-else
-    echo "${FAIL_COLOR}${XMARK} ${repos_with_issues} repository(s) have issues${RESET_COLOR}"
+# Show per-tool stats (skip in dryrun mode)
+if [[ "$DRYRUN" != true ]]; then
+    echo ""
+    echo "${CYAN_COLOR}Indictments Of The Conclave:${RESET_COLOR}"
+    for tool in "${tools_list[@]}"; do
+        local tool_display_name=$(get_tool_config "$tool" "name")
+        [[ -z "$tool_display_name" ]] && tool_display_name="$tool"
+        local count=${tool_stats["$tool"]}
+        if [[ $count -eq 0 ]]; then
+            echo "  ${SUCCESS_COLOR}${CHECKMARK}${RESET_COLOR} ${tool_display_name}: ${BLUE_COLOR}0${RESET_COLOR} issues"
+        else
+            echo "  ${FAIL_COLOR}${XMARK}${RESET_COLOR} ${tool_display_name}: ${BLUE_COLOR}${count}${RESET_COLOR} issues"
+        fi
+    done
 fi
 
-[[ $repos_with_issues -eq 0 ]] && exit 0 || exit 1
+echo ""
+if [[ "$DRYRUN" == true ]]; then
+    echo "${SUCCESS_COLOR}${CHECKMARK} Guild training complete - members are ready${RESET_COLOR}"
+    exit 0
+elif [[ $repos_with_issues -eq 0 ]]; then
+    echo "${SUCCESS_COLOR}${CHECKMARK} All repositories are clean!${RESET_COLOR}"
+    exit 0
+else
+    echo "${FAIL_COLOR}${XMARK} ${repos_with_issues} repository(s) have issues${RESET_COLOR}"
+    exit 1
+fi
