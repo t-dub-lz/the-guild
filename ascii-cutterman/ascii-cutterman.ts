@@ -17,6 +17,7 @@ const FAIL_COLOR = '\x1b[31m';
 const YELLOW_COLOR = '\x1b[33m';
 const BLUE_COLOR = '\x1b[34m';
 const MAGENTA_COLOR = '\x1b[35m';
+const CYAN_COLOR = '\x1b[36m';
 const RESET_COLOR = '\x1b[0m';
 
 const UNICODE_TAG_START = 0xE0000;
@@ -92,6 +93,96 @@ const REPLACEMENTS: Record<number, { replacement: string; name: string }> = {
   0x2028: { replacement: '\n', name: 'Line separator' },
   0x2029: { replacement: '\n\n', name: 'Paragraph separator' },
 };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ENCODING DETECTION CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+const DEFAULT_MIN_BASE64_LENGTH = 24;  // Decodes to ~18 bytes
+const DEFAULT_MIN_HEX_LENGTH = 32;     // 16 bytes
+
+// Regex patterns - use capturing groups for the actual encoded content
+// Base64: standard alphabet with optional padding, word boundaries to avoid partial matches
+const BASE64_PATTERN = /(?<![a-zA-Z0-9+/=])([A-Za-z][A-Za-z0-9+/]{23,}={0,2})(?![a-zA-Z0-9+/=])/g;
+
+// Hex: case-insensitive, even length sequences
+const HEX_PATTERN = /(?<![a-fA-F0-9])([0-9a-fA-F]{32,})(?![a-fA-F0-9])/g;
+
+// Known safe patterns to exclude (reduce false positives)
+const SAFE_BASE64_CONTEXTS = [
+  /data:image\/[^;]+;base64,/,           // Data URIs for images
+  /data:application\/[^;]+;base64,/,     // Data URIs for apps
+  /data:text\/[^;]+;base64,/,            // Data URIs for text
+  /src\s*=\s*["']data:/,                 // Image src attributes
+  /Content-Transfer-Encoding:\s*base64/i, // Email encoding headers
+];
+
+// Safe hex patterns - these are legitimate and should not be flagged
+const SAFE_HEX_LENGTHS = new Set([
+  8,    // Short hash, color without #
+  32,   // MD5 hash
+  40,   // Git SHA-1
+  64,   // SHA-256
+  96,   // SHA-384
+  128,  // SHA-512
+]);
+
+// Suspicious decoded content indicators - security-relevant patterns
+const SUSPICIOUS_PATTERNS: { pattern: RegExp; description: string }[] = [
+  { pattern: /eval\s*\(/i, description: 'eval() call' },
+  { pattern: /exec\s*\(/i, description: 'exec() call' },
+  { pattern: /system\s*\(/i, description: 'system() call' },
+  { pattern: /spawn\s*\(/i, description: 'spawn() call' },
+  { pattern: /shell_exec/i, description: 'shell_exec call' },
+  { pattern: /Process\./i, description: 'Process object access' },
+  { pattern: /Runtime\.getRuntime/i, description: 'Java runtime access' },
+  { pattern: /os\.(popen|system|exec)/i, description: 'Python os module call' },
+  { pattern: /subprocess\./i, description: 'Python subprocess module' },
+  { pattern: /\$\(\s*[`'"]/i, description: 'Shell command substitution' },
+  { pattern: /`[^`]*`/, description: 'Backtick command execution' },
+  { pattern: /curl\s+/i, description: 'curl command' },
+  { pattern: /wget\s+/i, description: 'wget command' },
+  { pattern: /fetch\s*\(/i, description: 'fetch() call' },
+  { pattern: /\.env|password|secret|api.?key/i, description: 'Sensitive data reference' },
+  { pattern: /ignore.*instruction/i, description: 'Prompt injection: ignore instructions' },
+  { pattern: /disregard.*previous/i, description: 'Prompt injection: disregard previous' },
+  { pattern: /forget.*instruction/i, description: 'Prompt injection: forget instructions' },
+  { pattern: /new.*instruction/i, description: 'Prompt injection: new instructions' },
+  { pattern: /<script/i, description: 'Script tag injection' },
+  { pattern: /javascript:/i, description: 'JavaScript protocol' },
+  { pattern: /on\w+\s*=/i, description: 'Event handler injection' },
+  { pattern: /\bimport\s*\(/i, description: 'Dynamic import' },
+  { pattern: /require\s*\(['"]/i, description: 'Dynamic require' },
+  { pattern: /\$_(?:GET|POST|REQUEST|COOKIE)/i, description: 'PHP superglobal access' },
+  { pattern: /base64_decode/i, description: 'Nested base64 decode' },
+  { pattern: /fromCharCode/i, description: 'Character code obfuscation' },
+  { pattern: /\\x[0-9a-fA-F]{2}/g, description: 'Hex escape sequences' },
+];
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ENCODING DETECTION TYPES
+// ═══════════════════════════════════════════════════════════════════════════
+
+interface EncodingMatch {
+  type: 'base64' | 'hex';
+  encoded: string;           // The original encoded string (possibly truncated for display)
+  fullEncoded: string;       // Full original for length reporting
+  decoded: string;           // Decoded content (possibly truncated for display)
+  line: number;              // Line number
+  column: number;            // Column position
+  isSuspicious: boolean;     // Passed heuristic checks
+  suspicionReasons: string[]; // Why it's flagged
+}
+
+interface EncodingAnalysisResult {
+  base64Matches: EncodingMatch[];
+  hexMatches: EncodingMatch[];
+  totalSuspicious: number;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TIER 3: Homoglyph Detection
+// ═══════════════════════════════════════════════════════════════════════════
 
 const HOMOGLYPHS: Record<string, { replacement: string; name: string }> = {
   // Cyrillic lowercase
@@ -230,6 +321,364 @@ function tagToAscii(codePoint: number): string {
     }
   }
   return '';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ENCODING DETECTION HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Safely decode base64, handling errors gracefully
+ */
+function safeBase64Decode(str: string): string | null {
+  try {
+    // Remove whitespace that might be in the string
+    const cleaned = str.replace(/\s/g, '');
+
+    // Validate base64 format - add padding if needed
+    let padded = cleaned;
+    const remainder = cleaned.length % 4;
+    if (remainder > 0) {
+      padded = cleaned + '='.repeat(4 - remainder);
+    }
+
+    const decoded = Buffer.from(padded, 'base64').toString('utf-8');
+
+    // Verify it's actually valid by re-encoding - this catches invalid sequences
+    const reencoded = Buffer.from(decoded, 'utf-8').toString('base64').replace(/=+$/, '');
+    const originalNoPad = cleaned.replace(/=+$/, '');
+
+    // Allow some flexibility in matching (base64 can have slight variations)
+    if (reencoded.length > 0 && Math.abs(reencoded.length - originalNoPad.length) <= 4) {
+      return decoded;
+    }
+
+    // Even if re-encode doesn't match perfectly, return if decoded has content
+    if (decoded.length > 0) {
+      return decoded;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Safely decode hex string
+ */
+function safeHexDecode(str: string): string | null {
+  try {
+    // Remove common prefixes
+    let cleaned = str.replace(/^0x/i, '').replace(/\\x/g, '');
+
+    // Must be even length for valid hex
+    if (cleaned.length % 2 !== 0) {
+      cleaned = '0' + cleaned; // Pad with leading zero
+    }
+
+    const decoded = Buffer.from(cleaned, 'hex').toString('utf-8');
+    return decoded.length > 0 ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Calculate Shannon entropy of a string (bits per character)
+ * Higher entropy suggests random/encrypted/obfuscated data
+ */
+function calculateEntropy(str: string): number {
+  if (str.length === 0) return 0;
+
+  const freq = new Map<string, number>();
+  for (const char of str) {
+    freq.set(char, (freq.get(char) || 0) + 1);
+  }
+
+  let entropy = 0;
+  const len = str.length;
+  for (const count of freq.values()) {
+    const p = count / len;
+    entropy -= p * Math.log2(p);
+  }
+
+  return entropy;
+}
+
+/**
+ * Check if a string is mostly printable ASCII
+ */
+function getPrintableRatio(str: string): number {
+  if (str.length === 0) return 0;
+
+  let printable = 0;
+  for (const char of str) {
+    const code = char.charCodeAt(0);
+    // Printable ASCII range (space through tilde) plus common whitespace
+    if ((code >= 32 && code <= 126) || code === 9 || code === 10 || code === 13) {
+      printable++;
+    }
+  }
+
+  return printable / str.length;
+}
+
+/**
+ * Check if the context around a match suggests it's safe (e.g., data URI)
+ */
+function isInSafeBase64Context(content: string, position: number, matchLength: number): boolean {
+  // Get surrounding context (200 chars before)
+  const contextStart = Math.max(0, position - 200);
+  const context = content.slice(contextStart, position + matchLength);
+
+  // Check against safe patterns
+  for (const pattern of SAFE_BASE64_CONTEXTS) {
+    if (pattern.test(context)) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Check if a hex string is a known safe pattern (hash, UUID, etc.)
+ */
+function isKnownSafeHex(hexString: string): boolean {
+  const len = hexString.length;
+
+  // Check for standard hash lengths
+  if (SAFE_HEX_LENGTHS.has(len)) {
+    return true;
+  }
+
+  // Check for UUID pattern (with or without dashes - we see it without here)
+  if (len === 32) {
+    // 32 hex chars could be MD5 or UUID without dashes - consider safe
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Analyze decoded content for suspicious patterns
+ */
+function analyzeSuspiciousness(decoded: string): { isSuspicious: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+
+  // If it's mostly non-printable, it's likely binary data (less suspicious for text obfuscation)
+  const printableRatio = getPrintableRatio(decoded);
+  if (printableRatio < 0.7) {
+    // Mostly binary - not text obfuscation, skip further analysis
+    return { isSuspicious: false, reasons: [] };
+  }
+
+  // Check for suspicious patterns in decoded content
+  for (const { pattern, description } of SUSPICIOUS_PATTERNS) {
+    // Reset regex state for global patterns
+    pattern.lastIndex = 0;
+    if (pattern.test(decoded)) {
+      reasons.push(description);
+    }
+  }
+
+  // High entropy printable text is more suspicious (randomized to evade detection)
+  const entropy = calculateEntropy(decoded);
+  if (entropy > 5.0 && printableRatio > 0.9 && decoded.length > 50) {
+    reasons.push(`High entropy text (${entropy.toFixed(2)} bits/char) - possible obfuscation`);
+  }
+
+  return {
+    isSuspicious: reasons.length > 0,
+    reasons
+  };
+}
+
+/**
+ * Get line and column number for a position in content
+ */
+function getLineInfo(content: string, position: number): { line: number; column: number } {
+  const beforeMatch = content.slice(0, position);
+  const lines = beforeMatch.split('\n');
+  return {
+    line: lines.length,
+    column: lines[lines.length - 1].length + 1
+  };
+}
+
+/**
+ * Truncate a string for display, preserving useful information
+ */
+function truncateForDisplay(str: string, maxLen: number): string {
+  if (str.length <= maxLen) return str;
+  return str.slice(0, maxLen - 3) + '...';
+}
+
+/**
+ * Main encoding detection function - finds and analyzes base64/hex strings
+ */
+function detectEncodings(content: string): EncodingAnalysisResult {
+  const result: EncodingAnalysisResult = {
+    base64Matches: [],
+    hexMatches: [],
+    totalSuspicious: 0
+  };
+
+  // Detect base64
+  const base64Regex = new RegExp(BASE64_PATTERN.source, 'g');
+  let match;
+
+  while ((match = base64Regex.exec(content)) !== null) {
+    const encoded = match[1] || match[0];
+
+    // Skip if too short
+    if (encoded.length < DEFAULT_MIN_BASE64_LENGTH) continue;
+
+    // Skip if in safe context (data URI, etc.)
+    if (isInSafeBase64Context(content, match.index, encoded.length)) continue;
+
+    // Try to decode
+    const decoded = safeBase64Decode(encoded);
+    if (!decoded || decoded.length === 0) continue;
+
+    // Skip if decoded is mostly non-printable (binary data is usually legitimate)
+    const printableRatio = getPrintableRatio(decoded);
+    if (printableRatio < 0.5) continue;
+
+    // Analyze for suspiciousness
+    const { isSuspicious, reasons } = analyzeSuspiciousness(decoded);
+
+    const { line, column } = getLineInfo(content, match.index);
+
+    const encodingMatch: EncodingMatch = {
+      type: 'base64',
+      encoded: truncateForDisplay(encoded, 60),
+      fullEncoded: encoded,
+      decoded: truncateForDisplay(decoded, 100),
+      line,
+      column,
+      isSuspicious,
+      suspicionReasons: reasons
+    };
+
+    result.base64Matches.push(encodingMatch);
+    if (isSuspicious) result.totalSuspicious++;
+  }
+
+  // Detect hex
+  const hexRegex = new RegExp(HEX_PATTERN.source, 'g');
+
+  while ((match = hexRegex.exec(content)) !== null) {
+    const encoded = match[1] || match[0];
+
+    // Skip if too short
+    if (encoded.length < DEFAULT_MIN_HEX_LENGTH) continue;
+
+    // Skip known safe patterns (hashes, UUIDs)
+    if (isKnownSafeHex(encoded)) continue;
+
+    // Try to decode
+    const decoded = safeHexDecode(encoded);
+    if (!decoded || decoded.length === 0) continue;
+
+    // Skip if decoded is mostly non-printable
+    const printableRatio = getPrintableRatio(decoded);
+    if (printableRatio < 0.5) continue;
+
+    // Analyze for suspiciousness
+    const { isSuspicious, reasons } = analyzeSuspiciousness(decoded);
+
+    const { line, column } = getLineInfo(content, match.index);
+
+    const encodingMatch: EncodingMatch = {
+      type: 'hex',
+      encoded: truncateForDisplay(encoded, 60),
+      fullEncoded: encoded,
+      decoded: truncateForDisplay(decoded, 100),
+      line,
+      column,
+      isSuspicious,
+      suspicionReasons: reasons
+    };
+
+    result.hexMatches.push(encodingMatch);
+    if (isSuspicious) result.totalSuspicious++;
+  }
+
+  return result;
+}
+
+/**
+ * Output encoding analysis results to stderr
+ */
+function outputEncodingResults(
+  results: EncodingAnalysisResult,
+  linePrefix: string,
+  detailsOnly: boolean
+): void {
+  const { base64Matches, hexMatches } = results;
+
+  // Output base64 findings
+  if (base64Matches.length > 0) {
+    const suspiciousCount = base64Matches.filter(m => m.isSuspicious).length;
+
+    if (!detailsOnly || suspiciousCount > 0) {
+      stderr.write(`${linePrefix}${YELLOW_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} [base64] Found ${BLUE_COLOR}${base64Matches.length}${RESET_COLOR} base64 string${base64Matches.length !== 1 ? 's' : ''}`);
+      if (suspiciousCount > 0) {
+        stderr.write(` (${FAIL_COLOR}${suspiciousCount} suspicious${RESET_COLOR})`);
+      }
+      stderr.write(`\n`);
+
+      for (const match of base64Matches) {
+        // In details-only mode, only show suspicious matches
+        if (detailsOnly && !match.isSuspicious) continue;
+
+        const statusColor = match.isSuspicious ? FAIL_COLOR : CYAN_COLOR;
+        const statusIcon = match.isSuspicious ? XMARK : '?';
+
+        stderr.write(`${linePrefix}    ${statusColor}${statusIcon}${RESET_COLOR} Line ${match.line}: ${MAGENTA_COLOR}${match.encoded}${RESET_COLOR}\n`);
+        stderr.write(`${linePrefix}      Decodes to: "${BLUE_COLOR}${match.decoded}${RESET_COLOR}"\n`);
+
+        if (match.isSuspicious && match.suspicionReasons.length > 0) {
+          stderr.write(`${linePrefix}      ${FAIL_COLOR}Reasons:${RESET_COLOR}\n`);
+          for (const reason of match.suspicionReasons) {
+            stderr.write(`${linePrefix}        - ${reason}\n`);
+          }
+        }
+      }
+    }
+  }
+
+  // Output hex findings
+  if (hexMatches.length > 0) {
+    const suspiciousCount = hexMatches.filter(m => m.isSuspicious).length;
+
+    if (!detailsOnly || suspiciousCount > 0) {
+      stderr.write(`${linePrefix}${YELLOW_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} [hex] Found ${BLUE_COLOR}${hexMatches.length}${RESET_COLOR} hex string${hexMatches.length !== 1 ? 's' : ''}`);
+      if (suspiciousCount > 0) {
+        stderr.write(` (${FAIL_COLOR}${suspiciousCount} suspicious${RESET_COLOR})`);
+      }
+      stderr.write(`\n`);
+
+      for (const match of hexMatches) {
+        // In details-only mode, only show suspicious matches
+        if (detailsOnly && !match.isSuspicious) continue;
+
+        const statusColor = match.isSuspicious ? FAIL_COLOR : CYAN_COLOR;
+        const statusIcon = match.isSuspicious ? XMARK : '?';
+
+        stderr.write(`${linePrefix}    ${statusColor}${statusIcon}${RESET_COLOR} Line ${match.line}: ${MAGENTA_COLOR}${match.encoded}${RESET_COLOR}\n`);
+        stderr.write(`${linePrefix}      Decodes to: "${BLUE_COLOR}${match.decoded}${RESET_COLOR}"\n`);
+
+        if (match.isSuspicious && match.suspicionReasons.length > 0) {
+          stderr.write(`${linePrefix}      ${FAIL_COLOR}Reasons:${RESET_COLOR}\n`);
+          for (const reason of match.suspicionReasons) {
+            stderr.write(`${linePrefix}        - ${reason}\n`);
+          }
+        }
+      }
+    }
+  }
 }
 
 interface ReplacementInfo {
@@ -404,11 +853,20 @@ detects and removes Unicode tag sequences (U+E0000-U+E007F) that can be used to
 hide text.  The hidden text is revealed on stderr while the "cleaned" original
 file is sent to stdout.
 
+MULTI-PASS OBFUSCATION DETECTION:
+  [unicode]  Unicode smuggling, invisible formatting, and homoglyphs
+  [base64]   Base64-encoded strings (always scanned, decoded and analyzed)
+  [hex]      Hex-encoded strings (always scanned, decoded and analyzed)
+
+Encoding detection is always-on and will flag suspicious decoded content such as
+shell commands, eval() calls, prompt injection attempts, and other security-relevant
+patterns. Non-suspicious encodings are reported but don't affect exit code.
+
 WARNING: Stripping invisible formatting characters (-s) and homoglyphs (-S) can
 be useful to combat fingerprinting and steganography, but may break legitimate
 Unicode formatting in multilingual text, mathematical notation, or styled text.
 
-Strictness levels:
+Strictness levels (for Unicode processing):
   (default)       Detect only TRUE smuggling (Unicode tag characters)
   -s              Strict: also remove invisible formatting characters
   -S              Super strict: also replace homoglyphs with ASCII equivalents
@@ -423,8 +881,8 @@ Options:
   -h, --help      Show this help message
 
 Exit codes:
-  0 - Clean (no problematic characters found)
-  1 - Naughty (problematic characters found)
+  0 - Clean (no obfuscation or suspicious patterns found)
+  1 - Naughty (Unicode smuggling OR suspicious encoded content detected)
   2 - Error (file read/write error)
 `);
 }
@@ -573,7 +1031,14 @@ function main() {
     const content = readFileSync(options.filename, 'utf-8');
     const { cleaned, invisibleReplacements, homoglyphReplacements, smugglingSequencesRemoved, smugglingCharactersRemoved, hiddenTexts } = cleanContent(content, options.strictness);
 
-    const hasChanges = invisibleReplacements.size > 0 || homoglyphReplacements.size > 0 || smugglingCharactersRemoved > 0;
+    // Run encoding detection (always-on)
+    const encodingResults = detectEncodings(cleaned);
+
+    // Calculate what changed
+    const hasUnicodeChanges = invisibleReplacements.size > 0 || homoglyphReplacements.size > 0 || smugglingCharactersRemoved > 0;
+    const hasEncodingFindings = encodingResults.base64Matches.length > 0 || encodingResults.hexMatches.length > 0;
+    const hasSuspiciousEncodings = encodingResults.totalSuspicious > 0;
+    const hasChanges = hasUnicodeChanges || hasEncodingFindings;
 
     // Write the cleaned content (unless -n or -nn option is used)
     if (!options.noOutput) {
@@ -592,13 +1057,13 @@ function main() {
       
       if (options.detailsOnly) {
         // In details-only mode, only show the issue details if there are problems
-        if (hasChanges) {
+        if (hasUnicodeChanges) {
           if (smugglingCharactersRemoved > 0) {
-            stderr.write(`${linePrefix}${FAIL_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} SMUGGLING DETECTED: Removed ${BLUE_COLOR}${smugglingSequencesRemoved}${RESET_COLOR} Unicode tag sequence${smugglingSequencesRemoved !== 1 ? 's' : ''} (${BLUE_COLOR}${smugglingCharactersRemoved}${RESET_COLOR} character${smugglingCharactersRemoved !== 1 ? 's' : ''})\n`);
+            stderr.write(`${linePrefix}${FAIL_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} [unicode] SMUGGLING DETECTED: Removed ${BLUE_COLOR}${smugglingSequencesRemoved}${RESET_COLOR} Unicode tag sequence${smugglingSequencesRemoved !== 1 ? 's' : ''} (${BLUE_COLOR}${smugglingCharactersRemoved}${RESET_COLOR} character${smugglingCharactersRemoved !== 1 ? 's' : ''})\n`);
 
             // Always show hidden text that was found
             if (hiddenTexts.length > 0) {
-              stderr.write(`${linePrefix}${FAIL_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} Hidden text that was smuggled:\n`);
+              stderr.write(`${linePrefix}${FAIL_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} [unicode] Hidden text that was smuggled:\n`);
               hiddenTexts.forEach((text, idx) => {
                 stderr.write(`${linePrefix}    Sequence ${idx + 1}: "${BLUE_COLOR}${text}${RESET_COLOR}"\n`);
               });
@@ -606,18 +1071,23 @@ function main() {
           }
 
           if (invisibleReplacements.size > 0) {
-            stderr.write(`${linePrefix}${YELLOW_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} Invisible formatting characters detected:\n`);
+            stderr.write(`${linePrefix}${YELLOW_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} [unicode] Invisible formatting characters detected:\n`);
             invisibleReplacements.forEach((info, char) => {
               stderr.write(`${linePrefix}    ${char} (${info.name}): ${BLUE_COLOR}${info.count}${RESET_COLOR} occurrence${info.count > 1 ? 's' : ''}\n`);
             });
           }
 
           if (homoglyphReplacements.size > 0) {
-            stderr.write(`${linePrefix}${YELLOW_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} Homoglyphs detected:\n`);
+            stderr.write(`${linePrefix}${YELLOW_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} [unicode] Homoglyphs detected:\n`);
             homoglyphReplacements.forEach((info, char) => {
               stderr.write(`${linePrefix}    ${char} (${info.name}): ${BLUE_COLOR}${info.count}${RESET_COLOR} occurrence${info.count > 1 ? 's' : ''}\n`);
             });
           }
+        }
+
+        // Output encoding results in details-only mode
+        if (encodingResults.base64Matches.length > 0 || encodingResults.hexMatches.length > 0) {
+          outputEncodingResults(encodingResults, linePrefix, true);
         }
       } else {
         // Normal mode - show full output
@@ -627,25 +1097,30 @@ function main() {
         // 2. stdout is a TTY (not redirected) AND
         // 3. Not using -n or -nn options
         const needsNewlines = !options.inPlace && !options.outputFile && !options.noOutput && isatty(stdout.fd);
-        const prefix = needsNewlines ? '\n\n' : '';
+        const newlinePrefix = needsNewlines ? '\n\n' : '';
 
         if (!hasChanges) {
-          stderr.write(`${prefix}${SUCCESS_COLOR}${CHECKMARK} SUCCESS:${RESET_COLOR} clean - No problematic characters in ${MAGENTA_COLOR}${options.filename}${RESET_COLOR}\n`);
+          stderr.write(`${newlinePrefix}${SUCCESS_COLOR}${CHECKMARK} SUCCESS:${RESET_COLOR} clean - No obfuscation detected in ${MAGENTA_COLOR}${options.filename}${RESET_COLOR}\n`);
         } else {
-          // Determine severity: smuggling is FAIL, others are just issues
-          const hasSmugglingissues = smugglingCharactersRemoved > 0;
-          if (hasSmugglingissues) {
-            stderr.write(`${prefix}${FAIL_COLOR}${XMARK} FAIL:${RESET_COLOR} SMUGGLING DETECTED in ${MAGENTA_COLOR}${options.filename}${RESET_COLOR}\n`);
+          // Determine severity: smuggling or suspicious encodings are FAIL
+          const hasSmugglingIssues = smugglingCharactersRemoved > 0;
+          const hasSuspiciousEncodings = encodingResults.totalSuspicious > 0;
+
+          if (hasSmugglingIssues || hasSuspiciousEncodings) {
+            stderr.write(`${newlinePrefix}${FAIL_COLOR}${XMARK} FAIL:${RESET_COLOR} Obfuscation detected in ${MAGENTA_COLOR}${options.filename}${RESET_COLOR}\n`);
+          } else if (hasUnicodeChanges) {
+            stderr.write(`${newlinePrefix}${YELLOW_COLOR}⚠ WARNING:${RESET_COLOR} Suspicious characters found in ${MAGENTA_COLOR}${options.filename}${RESET_COLOR}\n`);
           } else {
-            stderr.write(`${prefix}${YELLOW_COLOR}⚠ WARNING:${RESET_COLOR} Suspicious characters found in ${MAGENTA_COLOR}${options.filename}${RESET_COLOR}\n`);
+            // Only has non-suspicious base64/hex - informational
+            stderr.write(`${newlinePrefix}${CYAN_COLOR}ℹ INFO:${RESET_COLOR} Encoded content found in ${MAGENTA_COLOR}${options.filename}${RESET_COLOR}\n`);
           }
 
           if (smugglingCharactersRemoved > 0) {
-            stderr.write(`${FAIL_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} SMUGGLING: Removed ${BLUE_COLOR}${smugglingSequencesRemoved}${RESET_COLOR} Unicode tag sequence${smugglingSequencesRemoved !== 1 ? 's' : ''} (${BLUE_COLOR}${smugglingCharactersRemoved}${RESET_COLOR} character${smugglingCharactersRemoved !== 1 ? 's' : ''})\n`);
+            stderr.write(`${FAIL_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} [unicode] SMUGGLING: Removed ${BLUE_COLOR}${smugglingSequencesRemoved}${RESET_COLOR} Unicode tag sequence${smugglingSequencesRemoved !== 1 ? 's' : ''} (${BLUE_COLOR}${smugglingCharactersRemoved}${RESET_COLOR} character${smugglingCharactersRemoved !== 1 ? 's' : ''})\n`);
 
             // Always show hidden text that was found
             if (hiddenTexts.length > 0) {
-              stderr.write(`${FAIL_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} Hidden text that was smuggled:\n`);
+              stderr.write(`${FAIL_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} [unicode] Hidden text that was smuggled:\n`);
               hiddenTexts.forEach((text, idx) => {
                 stderr.write(`    Sequence ${idx + 1}: "${BLUE_COLOR}${text}${RESET_COLOR}"\n`);
               });
@@ -653,17 +1128,22 @@ function main() {
           }
 
           if (invisibleReplacements.size > 0) {
-            stderr.write(`${YELLOW_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} Invisible formatting characters replaced:\n`);
+            stderr.write(`${YELLOW_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} [unicode] Invisible formatting characters replaced:\n`);
             invisibleReplacements.forEach((info, char) => {
               stderr.write(`    ${char} (${info.name}): ${BLUE_COLOR}${info.count}${RESET_COLOR} occurrence${info.count > 1 ? 's' : ''}\n`);
             });
           }
 
           if (homoglyphReplacements.size > 0) {
-            stderr.write(`${YELLOW_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} Homoglyphs replaced with ASCII equivalents:\n`);
+            stderr.write(`${YELLOW_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} [unicode] Homoglyphs replaced with ASCII equivalents:\n`);
             homoglyphReplacements.forEach((info, char) => {
               stderr.write(`    ${char} (${info.name}): ${BLUE_COLOR}${info.count}${RESET_COLOR} occurrence${info.count > 1 ? 's' : ''}\n`);
             });
+          }
+
+          // Output encoding results
+          if (encodingResults.base64Matches.length > 0 || encodingResults.hexMatches.length > 0) {
+            outputEncodingResults(encodingResults, linePrefix, false);
           }
 
           if (options.inPlace) {
@@ -677,11 +1157,15 @@ function main() {
 
     // Record data if sigil provided
     if (options.sigil) {
-      recordData(options.sigil, options.filename!, smugglingCharactersRemoved > 0);
+      recordData(options.sigil, options.filename!, smugglingCharactersRemoved > 0 || hasSuspiciousEncodings);
     }
 
-    // Exit with appropriate code
-    exit(hasChanges ? 1 : 0);
+    // Exit with appropriate code:
+    // 0 = Clean (nothing suspicious)
+    // 1 = Fail (smuggling detected OR suspicious encodings found)
+    // Note: Non-suspicious encodings and minor Unicode issues don't trigger failure
+    const shouldFail = smugglingCharactersRemoved > 0 || hasSuspiciousEncodings;
+    exit(shouldFail ? 1 : 0);
   } catch (error) {
     if (!options.silent) {
       stderr.write(`${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} ${error}\n`);
