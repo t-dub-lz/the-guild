@@ -1,6 +1,6 @@
 #!/usr/bin/env -S npx tsx
 
-import { readFileSync, existsSync, appendFileSync, unlinkSync } from "fs";
+import { readFileSync, existsSync, appendFileSync, unlinkSync, lstatSync, readlinkSync } from "fs";
 import { argv, exit, stderr, stdout, env } from "process";
 import { tmpdir } from "os";
 import { join, basename } from "path";
@@ -621,6 +621,23 @@ async function main(): Promise<void> {
     exit(2);
   }
 
+  // Check if file is a symlink - note it and skip duplicate analysis
+  try {
+    const stats = lstatSync(options.filename);
+    if (stats.isSymbolicLink()) {
+      const target = readlinkSync(options.filename);
+      if (!options.silent && !options.detailsOnly) {
+        stderr.write(`${CYAN_COLOR}↪${RESET_COLOR} Symlink: ${MAGENTA_COLOR}${options.filename}${RESET_COLOR} → ${target} (skipping duplicate analysis)\n`);
+      } else if (!options.silent && options.detailsOnly) {
+        const prefix = options.prefix || '';
+        stderr.write(`${prefix}${CYAN_COLOR}↪${RESET_COLOR} Symlink to: ${target}\n`);
+      }
+      exit(0);  // Clean - no issues, just a symlink
+    }
+  } catch {
+    // If we can't stat the file, we'll catch it in the read below
+  }
+
   // Read file
   let content: string;
   try {
@@ -630,6 +647,17 @@ async function main(): Promise<void> {
       stderr.write(`${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} Could not read file: ${options.filename}\n`);
     }
     exit(2);
+  }
+
+  // Check if file is empty or whitespace-only - skip analysis
+  if (content.trim().length === 0) {
+    if (!options.silent && !options.detailsOnly) {
+      stderr.write(`${CYAN_COLOR}○${RESET_COLOR} Empty: ${MAGENTA_COLOR}${options.filename}${RESET_COLOR} (no content to analyze)\n`);
+    } else if (!options.silent && options.detailsOnly) {
+      const prefix = options.prefix || '';
+      stderr.write(`${prefix}${CYAN_COLOR}○${RESET_COLOR} Empty file\n`);
+    }
+    exit(0);  // Clean - no issues, just empty
   }
 
   // Initialize OpenAI client
