@@ -178,30 +178,45 @@ get_tool_executable() {
     return 1
 }
 
-# Read tool config value using jq or python fallback
+# Strip JSONC comments from input
+# Removes // comments on their own lines and /* */ block comments
+strip_jsonc_comments() {
+    local input="$1"
+    echo "$input" | sed -e '/^[[:space:]]*\/\//d' -e 's|/\*.*\*/||g'
+}
+
+# Read tool config value using jq or python fallback (supports JSONC)
 get_tool_config() {
     local tool_name="$1"
     local key="$2"
     local config_file="$SCRIPT_DIR/$tool_name/config.json"
+    local json_content
+
+    # Read and strip JSONC comments
+    json_content=$(strip_jsonc_comments "$(cat "$config_file")")
 
     if command -v jq &>/dev/null; then
-        jq -r ".$key // empty" "$config_file" 2>/dev/null
+        echo "$json_content" | jq -r ".$key // empty" 2>/dev/null
     elif command -v python3 &>/dev/null; then
-        python3 -c "import json; d=json.load(open('$config_file')); print(d.get('$key', ''))" 2>/dev/null
+        python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('$key', ''))" <<< "$json_content" 2>/dev/null
     else
         echo ""
     fi
 }
 
-# Get file patterns for a tool
+# Get file patterns for a tool (supports JSONC)
 get_tool_patterns() {
     local tool_name="$1"
     local config_file="$SCRIPT_DIR/$tool_name/config.json"
+    local json_content
+
+    # Read and strip JSONC comments
+    json_content=$(strip_jsonc_comments "$(cat "$config_file")")
 
     if command -v jq &>/dev/null; then
-        jq -r '.patterns[]? // empty' "$config_file" 2>/dev/null
+        echo "$json_content" | jq -r '.patterns[]? // empty' 2>/dev/null
     elif command -v python3 &>/dev/null; then
-        python3 -c "import json; d=json.load(open('$config_file')); [print(p) for p in d.get('patterns', [])]" 2>/dev/null
+        python3 -c "import json,sys; d=json.loads(sys.stdin.read()); [print(p) for p in d.get('patterns', [])]" <<< "$json_content" 2>/dev/null
     else
         echo "*"
     fi
