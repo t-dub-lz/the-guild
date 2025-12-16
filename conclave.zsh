@@ -236,6 +236,13 @@ tool_ignores_all() {
     [[ "$val" == "true" ]]
 }
 
+# Check if tool operates at repository scope (once per repo, not per file)
+tool_has_repository_scope() {
+    local tool_name="$1"
+    local val=$(get_tool_config "$tool_name" "repositoryScope")
+    [[ "$val" == "true" ]]
+}
+
 # Check if a member is in the excluded list
 is_member_excluded() {
     local member_name="$1"
@@ -585,6 +592,53 @@ while IFS= read -r repo; do
 
         echo ""
         echo "${CYAN_COLOR}Consulting ${tool_display_name}${RESET_COLOR}"
+
+        # Handle repository-scope tools (run once per repo, not per file)
+        if tool_has_repository_scope "$tool"; then
+            # In guild training mode, just report that this tool will run
+            if [[ "$DRYRUN" == true ]]; then
+                tool_file_counts["$tool"]=$((tool_file_counts["$tool"] + 1))
+                echo "${CYAN_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} Repository-scope tool (1 invocation)"
+                continue
+            fi
+
+            local temp_results=$(mktemp)
+            local exit_code=0
+
+            # Run tool in background with spinner
+            ("$tool_exe" $STRICTNESS_FLAG -g "$SIGIL" -nn "$repo_path" > /dev/null 2>&1; echo $? > "$temp_results") &
+            local tool_pid=$!
+
+            printf "${NEON_GREEN}${SPINNER_FRAMES[$SPINNER_INDEX]}${RESET_COLOR} Analyzing repository..."
+            while kill -0 "$tool_pid" 2>/dev/null; do
+                sleep 0.1
+                SPINNER_INDEX=$(( SPINNER_INDEX % ${#SPINNER_FRAMES[@]} + 1 ))
+                printf "\r${NEON_GREEN}${SPINNER_FRAMES[$SPINNER_INDEX]}${RESET_COLOR} Analyzing repository..."
+            done
+            wait "$tool_pid"
+            clear_spinner
+
+            exit_code=$(cat "$temp_results")
+            rm -f "$temp_results"
+
+            if [[ "$exit_code" -eq 0 ]]; then
+                echo "${SUCCESS_COLOR}${CHECKMARK}${RESET_COLOR} Clean"
+            elif [[ "$exit_code" -eq 1 ]]; then
+                repo_had_issues=true
+                tool_stats["$tool"]=$((tool_stats["$tool"] + 1))
+
+                # Get detailed output
+                local issues=$("$tool_exe" $STRICTNESS_FLAG -g "$SIGIL" -d --prefix="    " "$repo_path" 2>&1)
+                echo "${FAIL_COLOR}${XMARK}${RESET_COLOR} Issues found"
+                if [[ -n "$issues" ]]; then
+                    echo "$issues"
+                fi
+            else
+                echo "${YELLOW_COLOR}${WARNING_SYMBOL}${RESET_COLOR} Tool error (exit code: $exit_code)"
+            fi
+
+            continue
+        fi
 
         # Find files for this tool (with spinner for slow operations)
         local files=()
