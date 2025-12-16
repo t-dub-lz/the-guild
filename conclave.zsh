@@ -31,6 +31,7 @@ PARALLEL_JOBS=10
 STRICTNESS_FLAG=""
 SCAN_ALL_OVERRIDE=false  # -a flag overrides per-tool config
 DRYRUN=false             # -n flag for guild training mode (counts files only)
+EXCLUDED_MEMBERS=()      # -x flag to exclude specific members
 
 # Generate unique sigil (UUID) for this session
 SIGIL=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || date +%s%N | sha256sum | cut -c1-36)
@@ -104,6 +105,7 @@ show_help() {
     echo "  -o <org>        Organization name (default: your GitHub user)"
     echo "  -l <number>     Limit number of repos to fetch (default: 10000)"
     echo "  -j <number>     Number of parallel jobs (default: 10)"
+    echo "  -x <members>    Exclude members by folder name (comma-separated)"
     echo "  -a              Scan all text files (overrides per-tool config)"
     echo "  -n              Guild training - count files without running analysis"
     echo "  -s              Strict mode"
@@ -138,6 +140,9 @@ discover_tools() {
         [[ "$dirname" == .* ]] && continue
         [[ "$dirname" == "node_modules" ]] && continue
         [[ "$dirname" == ".repos" ]] && continue
+
+        # Skip excluded members
+        is_member_excluded "$dirname" && continue
 
         # Look for executable with same name as folder (any extension)
         local tool_exe=""
@@ -214,6 +219,15 @@ tool_ignores_all() {
     local tool_name="$1"
     local val=$(get_tool_config "$tool_name" "ignoreAll")
     [[ "$val" == "true" ]]
+}
+
+# Check if a member is in the excluded list
+is_member_excluded() {
+    local member_name="$1"
+    for excluded in "${EXCLUDED_MEMBERS[@]}"; do
+        [[ "$excluded" == "$member_name" ]] && return 0
+    done
+    return 1
 }
 
 # Sync a repository (clone or pull)
@@ -331,6 +345,42 @@ while [[ $# -gt 0 ]]; do
             PARALLEL_JOBS="$2"
             shift 2
             ;;
+        -x)
+            if [[ -z "$2" ]]; then
+                echo "${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} -x requires comma-separated member folder names" >&2
+                exit 1
+            fi
+            IFS=',' read -A EXCLUDED_MEMBERS <<< "$2"
+            # Validate each excluded member exists
+            for member in "${EXCLUDED_MEMBERS[@]}"; do
+                local member_dir="$SCRIPT_DIR/$member"
+                local has_config=false
+                local has_exe=false
+                [[ -f "$member_dir/config.json" ]] && has_config=true
+                for ext in "" ".sh" ".zsh" ".ts" ".py" ".js"; do
+                    [[ -f "$member_dir/${member}${ext}" ]] && has_exe=true && break
+                done
+                if [[ "$has_config" != true || "$has_exe" != true ]]; then
+                    echo "${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} Unknown member: ${member}" >&2
+                    echo "  Available members:" >&2
+                    for dir in "$SCRIPT_DIR"/*/; do
+                        [[ ! -d "$dir" ]] && continue
+                        local dirname="${dir%/}"
+                        dirname="${dirname##*/}"
+                        [[ "$dirname" == .* || "$dirname" == "node_modules" || "$dirname" == ".repos" ]] && continue
+                        [[ -f "$dir/config.json" ]] || continue
+                        for ext in "" ".sh" ".zsh" ".ts" ".py" ".js"; do
+                            if [[ -f "$dir${dirname}${ext}" ]]; then
+                                echo "    - ${dirname}" >&2
+                                break
+                            fi
+                        done
+                    done
+                    exit 1
+                fi
+            done
+            shift 2
+            ;;
         -a)
             SCAN_ALL_OVERRIDE=true
             shift
@@ -381,6 +431,14 @@ for tool in "${tools_list[@]}"; do
     [[ -z "$tool_display_name" ]] && tool_display_name="$tool"
     echo "  ${CYAN_COLOR}${tool_display_name}${RESET_COLOR}"
 done
+if [[ ${#EXCLUDED_MEMBERS[@]} -gt 0 ]]; then
+    echo "${YELLOW_COLOR}${WARNING_SYMBOL}${RESET_COLOR} Excluded from conclave: ${BLUE_COLOR}${#EXCLUDED_MEMBERS[@]}${RESET_COLOR}"
+    for excluded in "${EXCLUDED_MEMBERS[@]}"; do
+        local excluded_display_name=$(get_tool_config "$excluded" "name")
+        [[ -z "$excluded_display_name" ]] && excluded_display_name="$excluded"
+        echo "  ${MAGENTA_COLOR}${excluded_display_name}${RESET_COLOR}"
+    done
+fi
 echo ""
 
 # Get list of repositories
