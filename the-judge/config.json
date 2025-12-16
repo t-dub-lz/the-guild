@@ -2,29 +2,105 @@
   "name": "The Judge",
   "description": "Analyzes AI agent instruction files for security, verbosity, and clarity using OpenAI",
   "patterns": [
+    // Cursor IDE
     ".cursorrules",
     ".cursorrc",
+    ".cursor/rules/*",
+    ".cursor/rules/**/*.md",
+
+    // GitHub Copilot
     "AGENTS.md",
     ".github/AGENTS.md",
+    "copilot-instructions.md",
+    ".github/copilot-instructions.md",
+    ".github/instructions/*.instructions.md",
+    ".github/prompts/*.prompt.md",
+    ".github/workflows/copilot-setup-steps.yml",
+    "GEMINI.md",
+
+    // Claude Code
     "CLAUDE.md",
+    "CLAUDE.local.md",
     ".claude/*",
     ".claude/settings.json",
     ".claude/commands/*",
+    ".claude/rules/*.md",
+    ".claude/rules/**/*.md",
+
+    // Google Gemini
     ".gemini/*",
-    "copilot-instructions.md",
-    ".github/copilot-instructions.md",
+
+    // Cline / Claude Dev
+    ".clinerules",
+    ".clinerules.md",
+    ".clinerules/*",
+
+    // Roo Code / Roo-Cline
+    ".roomodes",
+    ".rooignore",
+    ".roorules",
+    ".roorules/*",
+
+    // Aider
+    ".aider*",
+    ".aider.conf.yml",
+
+    // Continue.dev
+    ".continue/*",
+    ".continue/config.json",
+    ".continue/config.ts",
+
+    // Codeium
+    "CODEIUM.md",
+
+    // Windsurf
+    ".windsurf/*",
+    ".windsurfrules",
+    ".windsurf/rules/*",
+
+    // Tabnine
+    ".tabnine*",
+
+    // Sourcegraph Cody
+    ".cody/*",
+
+    // Zed Editor
+    ".zed/settings.json",
+    ".zed/rules/*",
+
+    // Amazon Q Developer
+    ".amazonq/*",
+    "amazonq.md",
+    "Q.md",
+
+    // JetBrains AI Assistant
+    ".idea/ai-instructions.md",
+    ".jetbrains/ai-instructions.md",
+
+    // Supermaven
+    ".supermaven/*",
+    ".supermaven.json",
+
+    // Void Editor
+    ".void/*",
+    "VOID.md",
+
+    // Generic / Emerging Patterns
     "AI_INSTRUCTIONS.md",
+    "INSTRUCTIONS.md",
+    "AI_RULES.md",
+    "LLM_INSTRUCTIONS.md",
+    "SYSTEM_PROMPT.md",
+    "CODING_GUIDELINES.md",
     ".aiconfig",
     ".aiconfig.json",
     ".aiconfig.yaml",
     ".assistant-config",
-    ".aider*",
-    ".continue/*",
-    "CODEIUM.md",
-    ".windsurf/*",
-    ".tabnine*",
-    ".cody/*",
-    "CODING_GUIDELINES.md"
+    ".ai/*",
+    ".ai/instructions.md",
+    ".ai/rules/*",
+    ".llm/*",
+    ".prompts/*"
   ],
   "scanAllText": false,
   "ignoreAll": true
