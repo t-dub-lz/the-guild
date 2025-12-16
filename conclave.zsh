@@ -622,7 +622,7 @@ while IFS= read -r repo; do
             rm -f "$temp_results"
 
             if [[ "$exit_code" -eq 0 ]]; then
-                echo "${SUCCESS_COLOR}${CHECKMARK}${RESET_COLOR} Clean"
+                echo "${SUCCESS_COLOR}${CHECKMARK}${RESET_COLOR} Clean - repository checked"
             elif [[ "$exit_code" -eq 1 ]]; then
                 repo_had_issues=true
                 tool_stats["$tool"]=$((tool_stats["$tool"] + 1))
