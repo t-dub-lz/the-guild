@@ -1,0 +1,12 @@
+{
+  // Catburglar - Snyk PR Check Analyzer
+  // Analyzes GitHub PRs for Snyk check failures across repositories
+  "name": "Catburglar",
+  "description": "Analyzes GitHub PRs for Snyk check failures",
+  "patterns": [],
+  "scanAllText": false,
+  // repositoryScope: true means this tool runs once per repository,
+  // not once per file. The tool receives the repo path and queries
+  // GitHub's API for PR status rather than scanning files.
+  "repositoryScope": true
+}
