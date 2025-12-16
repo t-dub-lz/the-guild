@@ -47,15 +47,15 @@ Each subdirectory is a "Guild Member" - a scanning tool. The convention:
 ```
 tool-name/
   tool-name.sh   # or .ts, .py, .js, .zsh - executable with same name as folder
-  config.json    # tool configuration
+  config.jsonc   # tool configuration in JSONC format
 ```
 
 The main executable must have the same name as its containing folder. Extensions
 supported: `.sh`, `.zsh`, `.ts`, `.py`, `.js`, or no extension.
 
-### Tool Config (config.json)
+### Tool Config (config.jsonc)
 
-Each tool requires a `config.json` file:
+Each tool requires a `config.jsonc` file:
 
 ```json
 {
@@ -133,7 +133,7 @@ large files that may need refactoring.
    chmod +x my-tool/my-tool.sh
    ```
 
-3. Create `config.json`:
+3. Create `config.jsonc`:
    ```json
    {
      "name": "My Tool",
@@ -152,5 +152,5 @@ large files that may need refactoring.
 
 - `zsh` - Shell interpreter
 - `gh` - GitHub CLI (for repo listing and cloning)
-- `jq` or `python3` - For parsing config.json
+- `jq` or `python3` - For parsing config.jsonc
 - Tool-specific dependencies (e.g., `bun` for TypeScript tools)

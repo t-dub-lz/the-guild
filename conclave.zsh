@@ -154,8 +154,8 @@ discover_tools() {
             fi
         done
 
-        # Check if config.json exists
-        local config_file="$dir/config.json"
+        # Check if config.jsonc exists
+        local config_file="$dir/config.jsonc"
         if [[ -n "$tool_exe" && -f "$config_file" ]]; then
             tools+=("$dirname")
         fi
@@ -189,7 +189,7 @@ strip_jsonc_comments() {
 get_tool_config() {
     local tool_name="$1"
     local key="$2"
-    local config_file="$SCRIPT_DIR/$tool_name/config.json"
+    local config_file="$SCRIPT_DIR/$tool_name/config.jsonc"
     local json_content
 
     # Read and strip JSONC comments
@@ -207,7 +207,7 @@ get_tool_config() {
 # Get file patterns for a tool (supports JSONC)
 get_tool_patterns() {
     local tool_name="$1"
-    local config_file="$SCRIPT_DIR/$tool_name/config.json"
+    local config_file="$SCRIPT_DIR/$tool_name/config.jsonc"
     local json_content
 
     # Read and strip JSONC comments
@@ -371,7 +371,7 @@ while [[ $# -gt 0 ]]; do
                 local member_dir="$SCRIPT_DIR/$member"
                 local has_config=false
                 local has_exe=false
-                [[ -f "$member_dir/config.json" ]] && has_config=true
+                [[ -f "$member_dir/config.jsonc" ]] && has_config=true
                 for ext in "" ".sh" ".zsh" ".ts" ".py" ".js"; do
                     [[ -f "$member_dir/${member}${ext}" ]] && has_exe=true && break
                 done
@@ -383,7 +383,7 @@ while [[ $# -gt 0 ]]; do
                         local dirname="${dir%/}"
                         dirname="${dirname##*/}"
                         [[ "$dirname" == .* || "$dirname" == "node_modules" || "$dirname" == ".repos" ]] && continue
-                        [[ -f "$dir/config.json" ]] || continue
+                        [[ -f "$dir/config.jsonc" ]] || continue
                         for ext in "" ".sh" ".zsh" ".ts" ".py" ".js"; do
                             if [[ -f "$dir${dirname}${ext}" ]]; then
                                 echo "    - ${dirname}" >&2
@@ -436,7 +436,7 @@ done < <(discover_tools)
 
 if [[ ${#tools_list[@]} -eq 0 ]]; then
     echo "${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} No Guild Member Present"
-    echo "Each Guild Member (tool) needs a folder with config.json and an executable with the same name as the folder"
+    echo "Each Guild Member (tool) needs a folder with config.jsonc and an executable with the same name as the folder"
     exit 1
 fi
 
