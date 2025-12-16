@@ -2,5 +2,6 @@
   "name": "ASCII Cutterman",
   "description": "Detects Unicode smuggling, invisible chars, and homoglyphs",
   "patterns": ["*.md", "*.txt"],
-  "scanAllText": false
+  "scanAllText": false,
+  "ignoreAll": false
 }

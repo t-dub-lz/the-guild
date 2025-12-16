@@ -209,6 +209,13 @@ tool_scans_all_text() {
     [[ "$val" == "true" ]]
 }
 
+# Check if tool ignores the -a (scan all) override
+tool_ignores_all() {
+    local tool_name="$1"
+    local val=$(get_tool_config "$tool_name" "ignoreAll")
+    [[ "$val" == "true" ]]
+}
+
 # Sync a repository (clone or pull)
 # Returns: CLONED, UPDATED, ORPHAN, or SKIP
 sync_repo() {
@@ -255,7 +262,7 @@ find_files_for_tool() {
     local repo_path="$2"
     local files=()
 
-    if [[ "$SCAN_ALL_OVERRIDE" == true ]] || tool_scans_all_text "$tool_name"; then
+    if { [[ "$SCAN_ALL_OVERRIDE" == true ]] && ! tool_ignores_all "$tool_name"; } || tool_scans_all_text "$tool_name"; then
         # Scan all text files (excluding .git)
         while IFS= read -r -d '' file; do
             if file --mime "$file" 2>/dev/null | grep -q "text/"; then

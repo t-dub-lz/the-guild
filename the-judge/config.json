@@ -26,5 +26,6 @@
     ".cody/*",
     "CODING_GUIDELINES.md"
   ],
-  "scanAllText": false
+  "scanAllText": false,
+  "ignoreAll": true
 }
