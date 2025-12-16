@@ -427,6 +427,17 @@ done
 # Ensure .repos directory exists
 mkdir -p "$REPOS_DIR"
 
+# Display banner
+echo ""
+echo "${CYAN_COLOR} _____ _            ____       _ _     _ ${RESET_COLOR}"
+echo "${CYAN_COLOR}|_   _| |__   ___  / ___|_   _(_) | __| |${RESET_COLOR}"
+echo "${CYAN_COLOR}  | | | '_ \\ / _ \\| |  _| | | | | |/ _\` |${RESET_COLOR}"
+echo "${CYAN_COLOR}  | | | | | |  __/| |_| | |_| | | | (_| |${RESET_COLOR}"
+echo "${CYAN_COLOR}  |_| |_| |_|\\___| \\____|\\__,_|_|_|\\__,_|${RESET_COLOR}"
+echo ""
+echo "${MAGENTA_COLOR}    The Guild of Aberrant Computation${RESET_COLOR}"
+echo ""
+
 # Discover tools
 echo "${BLUE_COLOR}Assembling Guild Members...${RESET_COLOR}"
 tools_list=()
