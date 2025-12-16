@@ -1,0 +1,9 @@
+{
+  "name": "Catburglar",
+  "description": "Analyzes GitHub PRs for Snyk check failures",
+  "patterns": [],
+  "scanAllText": false,
+  // Doesn't need individual files, operates exclusively on the repo itself via
+  // Github API calls.
+  "repositoryScope": true
+}
