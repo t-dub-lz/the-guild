@@ -241,9 +241,26 @@ generate_report() {
     local total_snyk=0
     local repos_with_snyk_issues=0
     local snyk_blocked_repos=()
+    local snyk_blocked_counts=()
+    local snyk_blocked_details=()
+    local seen_repos=()
 
     while IFS='|' read -r repo prs failing snyk details; do
         [[ -z "$repo" ]] && continue
+
+        # Skip duplicate repos (prevents double-reporting if same repo analyzed twice)
+        local is_duplicate=false
+        for seen in "${seen_repos[@]}"; do
+            if [[ "$seen" == "$repo" ]]; then
+                is_duplicate=true
+                break
+            fi
+        done
+        if [[ "$is_duplicate" == true ]]; then
+            continue
+        fi
+        seen_repos+=("$repo")
+
         total_repos=$((total_repos + 1))
         total_prs=$((total_prs + ${prs:-0}))
         total_failing=$((total_failing + ${failing:-0}))
@@ -251,7 +268,10 @@ generate_report() {
 
         if [[ "${snyk:-0}" -gt 0 ]]; then
             repos_with_snyk_issues=$((repos_with_snyk_issues + 1))
-            snyk_blocked_repos+=("$repo:$snyk:$details")
+            # Use array indices to avoid delimiter conflicts in JSON (which contains colons in URLs)
+            snyk_blocked_repos+=("$repo")
+            snyk_blocked_counts+=("$snyk")
+            snyk_blocked_details+=("$details")
         fi
     done < "$data_file"
 
@@ -272,11 +292,10 @@ generate_report() {
         printf "\n${RED}${BOLD}Snyk-Blocked PRs by Repository:${NC}\n"
         printf "────────────────────────────────────────────────────\n"
 
-        for entry in "${snyk_blocked_repos[@]}"; do
-            local repo="${entry%%:*}"
-            local rest="${entry#*:}"
-            local count="${rest%%:*}"
-            local details="${rest#*:}"
+        for i in "${!snyk_blocked_repos[@]}"; do
+            local repo="${snyk_blocked_repos[$i]}"
+            local count="${snyk_blocked_counts[$i]}"
+            local details="${snyk_blocked_details[$i]}"
 
             printf "\n${MAGENTA}%s${NC} (${RED}%s blocked${NC}):\n" "$repo" "$count"
             echo "$details" | jq -r '.[] | "  • PR #\(.pr_number): \(.title[0:50])...\n    \(.url)"' 2>/dev/null || true
