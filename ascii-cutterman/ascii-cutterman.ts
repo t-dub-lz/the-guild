@@ -23,6 +23,19 @@ const RESET_COLOR = '\x1b[0m';
 const UNICODE_TAG_START = 0xE0000;
 const UNICODE_TAG_END = 0xE007F;
 
+// Sneaky Bits encoding - binary using invisible math operators
+// Reference: https://embracethered.com/blog/posts/2025/sneaky-bits-and-ascii-smuggler/
+const SNEAKY_ZERO = 0x2062;  // Invisible times (binary 0)
+const SNEAKY_ONE = 0x2064;   // Invisible plus (binary 1)
+
+// Variant Selectors encoding - direct byte mapping
+// VS1-VS16: U+FE00-U+FE0F (bytes 0-15)
+// VS17-VS256: U+E0100-U+E01EF (bytes 16-255)
+const VS_BASE_START = 0xFE00;
+const VS_BASE_END = 0xFE0F;
+const VS_SUPPLEMENT_START = 0xE0100;
+const VS_SUPPLEMENT_END = 0xE01EF;
+
 // TIER 1: True smuggling - Unicode tag characters that encode hidden text
 // These are ALWAYS detected and removed (cannot be disabled)
 const SMUGGLING_RANGES = [
@@ -321,6 +334,74 @@ function tagToAscii(codePoint: number): string {
     }
   }
   return '';
+}
+
+/**
+ * Check if a codepoint is a sneaky bit character (invisible times or invisible plus)
+ */
+function isSneakyBitChar(codePoint: number): boolean {
+  return codePoint === SNEAKY_ZERO || codePoint === SNEAKY_ONE;
+}
+
+/**
+ * Check if a codepoint is a variant selector used for smuggling
+ */
+function isVariantSelector(codePoint: number): boolean {
+  return (codePoint >= VS_BASE_START && codePoint <= VS_BASE_END) ||
+         (codePoint >= VS_SUPPLEMENT_START && codePoint <= VS_SUPPLEMENT_END);
+}
+
+/**
+ * Decode a variant selector codepoint to its byte value (0-255)
+ */
+function decodeVariantSelector(codePoint: number): number {
+  if (codePoint >= VS_BASE_START && codePoint <= VS_BASE_END) {
+    return codePoint - VS_BASE_START;  // 0-15
+  }
+  return (codePoint - VS_SUPPLEMENT_START) + 16;  // 16-255
+}
+
+/**
+ * Decode an array of sneaky bit codepoints to ASCII text
+ * Each 8 consecutive bits decode to one byte
+ */
+function decodeSneakyBits(bits: number[]): string {
+  let decoded = '';
+  // Process in groups of 8 bits
+  for (let i = 0; i + 7 < bits.length; i += 8) {
+    let byte = 0;
+    for (let bit = 0; bit < 8; bit++) {
+      if (bits[i + bit] === SNEAKY_ONE) {
+        byte |= (1 << (7 - bit));
+      }
+    }
+    // Only include printable ASCII and common whitespace
+    if ((byte >= 0x20 && byte <= 0x7E) || byte === 0x09 || byte === 0x0A || byte === 0x0D) {
+      decoded += String.fromCharCode(byte);
+    } else if (byte > 0) {
+      // Non-printable but non-null - show as hex escape for visibility
+      decoded += `\\x${byte.toString(16).padStart(2, '0')}`;
+    }
+  }
+  return decoded;
+}
+
+/**
+ * Decode an array of variant selector codepoints to text
+ */
+function decodeVariantSelectors(selectors: number[]): string {
+  let decoded = '';
+  for (const cp of selectors) {
+    const byte = decodeVariantSelector(cp);
+    // Only include printable ASCII and common whitespace
+    if ((byte >= 0x20 && byte <= 0x7E) || byte === 0x09 || byte === 0x0A || byte === 0x0D) {
+      decoded += String.fromCharCode(byte);
+    } else if (byte > 0) {
+      // Non-printable but non-null - show as hex escape for visibility
+      decoded += `\\x${byte.toString(16).padStart(2, '0')}`;
+    }
+  }
+  return decoded;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -686,8 +767,15 @@ interface ReplacementInfo {
   name: string;
 }
 
+// Smuggling method types for tracking
+interface SmugglingResult {
+  method: 'unicode-tags' | 'sneaky-bits' | 'variant-sel';
+  text: string;
+  charCount: number;
+}
+
 // Strictness levels:
-// 0 = default: only detect smuggling (tag characters)
+// 0 = default: only detect smuggling (tag characters, sneaky bits, variant selectors)
 // 1 = strict (-s): detect smuggling + invisible formatting
 // 2 = super strict (-S): detect smuggling + invisible formatting + homoglyphs
 function cleanContent(content: string, strictness: number = 0): {
@@ -697,15 +785,60 @@ function cleanContent(content: string, strictness: number = 0): {
   smugglingSequencesRemoved: number;
   smugglingCharactersRemoved: number;
   hiddenTexts: string[];
+  // New: detailed smuggling results by method
+  smugglingResults: SmugglingResult[];
 } {
   const invisibleReplacements = new Map<string, ReplacementInfo>();
   const homoglyphReplacements = new Map<string, ReplacementInfo>();
   const hiddenTexts: string[] = [];
+  const smugglingResults: SmugglingResult[] = [];
   let smugglingSequencesRemoved = 0;
   let smugglingCharactersRemoved = 0;
   let cleaned = '';
-  let inSmugglingSequence = false;
-  let currentHiddenText = '';
+
+  // State tracking for Unicode tag sequences
+  let inTagSequence = false;
+  let currentTagText = '';
+
+  // State tracking for sneaky bits sequences
+  let sneakyBits: number[] = [];
+
+  // State tracking for variant selector sequences
+  let variantSelectors: number[] = [];
+
+  // Helper to flush sneaky bits if we have a complete sequence
+  const flushSneakyBits = () => {
+    if (sneakyBits.length >= 8) {
+      const decoded = decodeSneakyBits(sneakyBits);
+      if (decoded) {
+        hiddenTexts.push(decoded);
+        smugglingResults.push({
+          method: 'sneaky-bits',
+          text: decoded,
+          charCount: sneakyBits.length
+        });
+        smugglingSequencesRemoved++;
+      }
+    }
+    sneakyBits = [];
+  };
+
+  // Helper to flush variant selectors
+  const flushVariantSelectors = () => {
+    if (variantSelectors.length > 0) {
+      const decoded = decodeVariantSelectors(variantSelectors);
+      if (decoded) {
+        hiddenTexts.push(decoded);
+        smugglingResults.push({
+          method: 'variant-sel',
+          text: decoded,
+          charCount: variantSelectors.length
+        });
+        smugglingSequencesRemoved++;
+      }
+    }
+    variantSelectors = [];
+  };
 
   for (const char of content) {
     const codePoint = char.codePointAt(0);
@@ -714,33 +847,75 @@ function cleanContent(content: string, strictness: number = 0): {
       continue;
     }
 
-    // TIER 1: Always remove smuggling characters (Unicode tags) and collect hidden text
+    // TIER 1a: Unicode tag characters (original smuggling method)
     if (isSmugglingChar(codePoint)) {
-      if (!inSmugglingSequence) {
-        smugglingSequencesRemoved++;
-        inSmugglingSequence = true;
-        if (currentHiddenText) {
-          hiddenTexts.push(currentHiddenText);
-          currentHiddenText = '';
+      // Flush other sequence types
+      flushSneakyBits();
+      flushVariantSelectors();
+
+      if (!inTagSequence) {
+        inTagSequence = true;
+        if (currentTagText) {
+          hiddenTexts.push(currentTagText);
+          smugglingResults.push({
+            method: 'unicode-tags',
+            text: currentTagText,
+            charCount: currentTagText.length + 2 // +2 for begin/cancel tags
+          });
+          currentTagText = '';
         }
+        smugglingSequencesRemoved++;
       }
       smugglingCharactersRemoved++;
       // Extract the hidden ASCII character
       const ascii = tagToAscii(codePoint);
       if (ascii) {
-        currentHiddenText += ascii;
+        currentTagText += ascii;
       }
-      // Always skip smuggling characters
       continue;
-    } else {
-      if (inSmugglingSequence && currentHiddenText) {
-        hiddenTexts.push(currentHiddenText);
-        currentHiddenText = '';
+    } else if (inTagSequence) {
+      // End of tag sequence
+      if (currentTagText) {
+        hiddenTexts.push(currentTagText);
+        smugglingResults.push({
+          method: 'unicode-tags',
+          text: currentTagText,
+          charCount: smugglingCharactersRemoved
+        });
+        currentTagText = '';
       }
-      inSmugglingSequence = false;
+      inTagSequence = false;
+    }
+
+    // TIER 1b: Sneaky bits (invisible times/plus for binary encoding)
+    if (isSneakyBitChar(codePoint)) {
+      // Flush variant selectors if we're switching methods
+      flushVariantSelectors();
+
+      sneakyBits.push(codePoint);
+      smugglingCharactersRemoved++;
+      continue;
+    } else if (sneakyBits.length > 0) {
+      // End of sneaky bits sequence
+      flushSneakyBits();
+    }
+
+    // TIER 1c: Variant selectors
+    if (isVariantSelector(codePoint)) {
+      // Flush sneaky bits if switching methods
+      flushSneakyBits();
+
+      variantSelectors.push(codePoint);
+      smugglingCharactersRemoved++;
+      continue;
+    } else if (variantSelectors.length > 0) {
+      // End of variant selector sequence
+      flushVariantSelectors();
     }
 
     // TIER 2: Process invisible formatting characters only in strict mode (-s or -S)
+    // Note: sneaky bit chars (2062, 2064) are excluded from REPLACEMENTS handling
+    // when detected as part of a sequence above
     if (strictness >= 1 && codePoint in REPLACEMENTS) {
       const info = REPLACEMENTS[codePoint];
       const hexCode = `U+${codePoint.toString(16).toUpperCase().padStart(4, '0')}`;
@@ -772,12 +947,19 @@ function cleanContent(content: string, strictness: number = 0): {
     cleaned += char;
   }
 
-  // Don't forget the last hidden text if we ended in a smuggling sequence
-  if (currentHiddenText) {
-    hiddenTexts.push(currentHiddenText);
+  // Flush any remaining sequences at end of content
+  if (currentTagText) {
+    hiddenTexts.push(currentTagText);
+    smugglingResults.push({
+      method: 'unicode-tags',
+      text: currentTagText,
+      charCount: smugglingCharactersRemoved
+    });
   }
+  flushSneakyBits();
+  flushVariantSelectors();
 
-  return { cleaned, invisibleReplacements, homoglyphReplacements, smugglingSequencesRemoved, smugglingCharactersRemoved, hiddenTexts };
+  return { cleaned, invisibleReplacements, homoglyphReplacements, smugglingSequencesRemoved, smugglingCharactersRemoved, hiddenTexts, smugglingResults };
 }
 
 // Sigil data file helpers
@@ -849,14 +1031,18 @@ function usage() {
   stderr.write(`Usage: ascii-cutterman [-s|-S] [-i] [-o output.md] [-n|-nn|-d] <filename>
 
 The ASCII Cutterman combats the ASCII Smuggler!  Taking the supplied file, it
-detects and removes Unicode tag sequences (U+E0000-U+E007F) that can be used to
-hide text.  The hidden text is revealed on stderr while the "cleaned" original
-file is sent to stdout.
+detects and removes invisible character sequences that can be used to hide text.
+The hidden text is revealed on stderr while the "cleaned" original file is sent
+to stdout.
 
-MULTI-PASS OBFUSCATION DETECTION:
-  [unicode]  Unicode smuggling, invisible formatting, and homoglyphs
-  [base64]   Base64-encoded strings (always scanned, decoded and analyzed)
-  [hex]      Hex-encoded strings (always scanned, decoded and analyzed)
+SMUGGLING DETECTION (always-on, Tier 1):
+  [unicode-tags]  Unicode tag characters (U+E0000-U+E007F) - original method
+  [sneaky-bits]   Binary encoding via U+2062 (0) and U+2064 (1) invisible chars
+  [variant-sel]   Variant Selectors VS1-VS256 byte mapping
+
+ENCODING DETECTION (always-on):
+  [base64]   Base64-encoded strings (decoded and analyzed for suspicious content)
+  [hex]      Hex-encoded strings (decoded and analyzed for suspicious content)
 
 Encoding detection is always-on and will flag suspicious decoded content such as
 shell commands, eval() calls, prompt injection attempts, and other security-relevant
@@ -1029,7 +1215,7 @@ function main() {
 
   try {
     const content = readFileSync(options.filename, 'utf-8');
-    const { cleaned, invisibleReplacements, homoglyphReplacements, smugglingSequencesRemoved, smugglingCharactersRemoved, hiddenTexts } = cleanContent(content, options.strictness);
+    const { cleaned, invisibleReplacements, homoglyphReplacements, smugglingSequencesRemoved, smugglingCharactersRemoved, hiddenTexts, smugglingResults } = cleanContent(content, options.strictness);
 
     // Run encoding detection (always-on)
     const encodingResults = detectEncodings(cleaned);
@@ -1058,14 +1244,20 @@ function main() {
       if (options.detailsOnly) {
         // In details-only mode, only show the issue details if there are problems
         if (hasUnicodeChanges) {
-          if (smugglingCharactersRemoved > 0) {
-            stderr.write(`${linePrefix}${FAIL_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} [unicode] SMUGGLING DETECTED: Removed ${BLUE_COLOR}${smugglingSequencesRemoved}${RESET_COLOR} Unicode tag sequence${smugglingSequencesRemoved !== 1 ? 's' : ''} (${BLUE_COLOR}${smugglingCharactersRemoved}${RESET_COLOR} character${smugglingCharactersRemoved !== 1 ? 's' : ''})\n`);
+          if (smugglingResults.length > 0) {
+            // Group results by method for cleaner output
+            const byMethod = new Map<string, typeof smugglingResults>();
+            for (const result of smugglingResults) {
+              const existing = byMethod.get(result.method) || [];
+              existing.push(result);
+              byMethod.set(result.method, existing);
+            }
 
-            // Always show hidden text that was found
-            if (hiddenTexts.length > 0) {
-              stderr.write(`${linePrefix}${FAIL_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} [unicode] Hidden text that was smuggled:\n`);
-              hiddenTexts.forEach((text, idx) => {
-                stderr.write(`${linePrefix}    Sequence ${idx + 1}: "${BLUE_COLOR}${text}${RESET_COLOR}"\n`);
+            for (const [method, results] of byMethod) {
+              const totalChars = results.reduce((sum, r) => sum + r.charCount, 0);
+              stderr.write(`${linePrefix}${FAIL_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} [${method}] SMUGGLING DETECTED: ${BLUE_COLOR}${results.length}${RESET_COLOR} sequence${results.length !== 1 ? 's' : ''} (${BLUE_COLOR}${totalChars}${RESET_COLOR} character${totalChars !== 1 ? 's' : ''})\n`);
+              results.forEach((result, idx) => {
+                stderr.write(`${linePrefix}    Sequence ${idx + 1}: "${BLUE_COLOR}${result.text}${RESET_COLOR}"\n`);
               });
             }
           }
@@ -1115,14 +1307,21 @@ function main() {
             stderr.write(`${newlinePrefix}${CYAN_COLOR}ℹ INFO:${RESET_COLOR} Encoded content found in ${MAGENTA_COLOR}${options.filename}${RESET_COLOR}\n`);
           }
 
-          if (smugglingCharactersRemoved > 0) {
-            stderr.write(`${FAIL_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} [unicode] SMUGGLING: Removed ${BLUE_COLOR}${smugglingSequencesRemoved}${RESET_COLOR} Unicode tag sequence${smugglingSequencesRemoved !== 1 ? 's' : ''} (${BLUE_COLOR}${smugglingCharactersRemoved}${RESET_COLOR} character${smugglingCharactersRemoved !== 1 ? 's' : ''})\n`);
+          if (smugglingResults.length > 0) {
+            // Group results by method for cleaner output
+            const byMethod = new Map<string, typeof smugglingResults>();
+            for (const result of smugglingResults) {
+              const existing = byMethod.get(result.method) || [];
+              existing.push(result);
+              byMethod.set(result.method, existing);
+            }
 
-            // Always show hidden text that was found
-            if (hiddenTexts.length > 0) {
-              stderr.write(`${FAIL_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} [unicode] Hidden text that was smuggled:\n`);
-              hiddenTexts.forEach((text, idx) => {
-                stderr.write(`    Sequence ${idx + 1}: "${BLUE_COLOR}${text}${RESET_COLOR}"\n`);
+            for (const [method, results] of byMethod) {
+              const totalChars = results.reduce((sum, r) => sum + r.charCount, 0);
+              stderr.write(`${FAIL_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} [${method}] SMUGGLING: ${BLUE_COLOR}${results.length}${RESET_COLOR} sequence${results.length !== 1 ? 's' : ''} (${BLUE_COLOR}${totalChars}${RESET_COLOR} character${totalChars !== 1 ? 's' : ''})\n`);
+              stderr.write(`${FAIL_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} [${method}] Hidden text:\n`);
+              results.forEach((result, idx) => {
+                stderr.write(`    Sequence ${idx + 1}: "${BLUE_COLOR}${result.text}${RESET_COLOR}"\n`);
               });
             }
           }

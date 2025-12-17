@@ -22,12 +22,26 @@ const UNICODE_TAG_START = 0xE0000;
 const TAG_BEGIN = '\u{E0001}';   // U+E0001 - Language Tag / Begin
 const TAG_CANCEL = '\u{E007F}';  // U+E007F - Cancel Tag / End
 
+// Sneaky Bits encoding - binary using invisible math operators
+// Reference: https://embracethered.com/blog/posts/2025/sneaky-bits-and-ascii-smuggler/
+const SNEAKY_ZERO = '\u2062';  // Invisible times (binary 0)
+const SNEAKY_ONE = '\u2064';   // Invisible plus (binary 1)
+
+// Variant Selectors encoding - direct byte mapping
+// VS1-VS16: U+FE00-U+FE0F (bytes 0-15)
+// VS17-VS256: U+E0100-U+E01EF (bytes 16-255)
+const VS_BASE_START = 0xFE00;      // VS1-VS16 range start
+const VS_SUPPLEMENT_START = 0xE0100; // VS17-VS256 range start
+
+type EncodingMethod = 'tags' | 'sneaky' | 'variant';
+
 // ANSI colors for output
 const SUCCESS_COLOR = '\x1b[32m';
 const FAIL_COLOR = '\x1b[31m';
 const YELLOW_COLOR = '\x1b[33m';
 const BLUE_COLOR = '\x1b[34m';
 const MAGENTA_COLOR = '\x1b[35m';
+const CYAN_COLOR = '\x1b[36m';
 const RESET_COLOR = '\x1b[0m';
 
 const CHECKMARK = '\u2713';
@@ -61,27 +75,78 @@ function encodeAsTagCharacters(text: string): string {
 }
 
 /**
+ * Encode a string using Sneaky Bits technique
+ * Each byte is converted to 8 binary digits, represented by invisible chars:
+ * - U+2062 (invisible times) = 0
+ * - U+2064 (invisible plus) = 1
+ */
+function encodeAsSneakyBits(text: string): string {
+  let encoded = '';
+  for (const char of text) {
+    const byte = char.charCodeAt(0);
+    // Convert byte to 8 bits, MSB first
+    for (let bit = 7; bit >= 0; bit--) {
+      encoded += (byte >> bit) & 1 ? SNEAKY_ONE : SNEAKY_ZERO;
+    }
+  }
+  return encoded;
+}
+
+/**
+ * Encode a string using Variant Selectors technique
+ * Each byte (0-255) maps to a variant selector:
+ * - Bytes 0-15 → VS1-VS16 (U+FE00-U+FE0F)
+ * - Bytes 16-255 → VS17-VS256 (U+E0100-U+E01EF)
+ */
+function encodeAsVariantSelectors(text: string): string {
+  let encoded = '';
+  for (const char of text) {
+    const byte = char.charCodeAt(0) & 0xFF; // Ensure byte range
+    if (byte < 16) {
+      // VS1-VS16: U+FE00-U+FE0F
+      encoded += String.fromCodePoint(VS_BASE_START + byte);
+    } else {
+      // VS17-VS256: U+E0100-U+E01EF
+      encoded += String.fromCodePoint(VS_SUPPLEMENT_START + (byte - 16));
+    }
+  }
+  return encoded;
+}
+
+/**
  * Display help message
  */
 function usage(): void {
-  stderr.write(`Usage: ${TOOL_NAME} <plain-text> <text-to-smuggle>
+  stderr.write(`Usage: ${TOOL_NAME} [-m METHOD] <plain-text> <text-to-smuggle>
 
 The ASCII Smuggler creates test cases for ASCII Cutterman!
 
 Takes two arguments:
   1. Plain text - The visible text that will appear normally
-  2. Text to smuggle - The hidden text encoded as invisible Unicode tag characters
+  2. Text to smuggle - The hidden text encoded as invisible Unicode characters
 
-The smuggled text is appended to the end of the plain text using Unicode tag
-characters (U+E0000-U+E007F), which are invisible in most contexts but can be
-detected and decoded by tools like ASCII Cutterman.
+The smuggled text is appended to the end of the plain text using one of three
+encoding methods, all invisible in most contexts but detectable by ASCII Cutterman.
+
+ENCODING METHODS (-m):
+  tags     (default) Unicode tag characters (U+E0000-U+E007F)
+                     Maps ASCII 1:1 to tag characters. Most compatible.
+
+  sneaky   Sneaky Bits - binary encoding using invisible math operators
+                     Uses U+2062 (invisible times) for 0, U+2064 (invisible plus) for 1.
+                     8:1 expansion (each byte becomes 8 invisible chars).
+
+  variant  Variant Selectors - direct byte mapping (VS1-VS256)
+                     Maps bytes 0-255 to variant selectors. 1:1 expansion.
+                     Most efficient for binary data.
 
 Example:
   ${TOOL_NAME} "Hello World" "secret message"
-
-  Output: Hello World (with invisible "secret message" at the end)
+  ${TOOL_NAME} -m sneaky "Hello World" "secret"
+  ${TOOL_NAME} -m variant "Hello World" "secret"
 
 Options:
+  -m, --method    Encoding method: tags (default), sneaky, or variant
   -h, --help      Show this help message
   -v, --verbose   Show details about the encoding
 
@@ -99,12 +164,14 @@ function parseArgs(args: string[]): {
   smuggleText?: string;
   help: boolean;
   verbose: boolean;
+  method: EncodingMethod;
 } {
   const result = {
     plainText: undefined as string | undefined,
     smuggleText: undefined as string | undefined,
     help: false,
     verbose: false,
+    method: 'tags' as EncodingMethod,
   };
 
   const positionalArgs: string[] = [];
@@ -116,6 +183,18 @@ function parseArgs(args: string[]): {
       result.help = true;
     } else if (arg === '-v' || arg === '--verbose') {
       result.verbose = true;
+    } else if (arg === '-m' || arg === '--method') {
+      i++;
+      if (i >= args.length) {
+        stderr.write(`${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} -m requires a method argument (tags, sneaky, or variant)\n`);
+        exit(1);
+      }
+      const method = args[i].toLowerCase();
+      if (method !== 'tags' && method !== 'sneaky' && method !== 'variant') {
+        stderr.write(`${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} Invalid method: ${args[i]}. Use tags, sneaky, or variant.\n`);
+        exit(1);
+      }
+      result.method = method as EncodingMethod;
     } else if (!arg.startsWith('-')) {
       positionalArgs.push(arg);
     } else {
@@ -151,31 +230,52 @@ function main(): void {
     exit(1);
   }
 
-  // Encode the smuggle text as Unicode tag characters
-  const encodedSmuggle = encodeAsTagCharacters(options.smuggleText);
+  let encodedSmuggle: string;
+  let methodDescription: string;
 
-  // Build spec-compliant tag sequence per Unicode Standard:
-  // - U+E0001 (LANGUAGE TAG) - begins the tag sequence
-  // - U+E0020-U+E007E - tag characters encoding the content
-  // - U+E007F (CANCEL TAG) - terminates the tag sequence
-  //
-  // Note: Many terminals show unknown glyphs for tag characters - this is
-  // expected. The text is still "hidden" (unreadable). In web/HTML contexts
-  // where smuggling attacks are most dangerous, tag characters render invisible.
-  const tagSequence = TAG_BEGIN + encodedSmuggle + TAG_CANCEL;
+  switch (options.method) {
+    case 'sneaky':
+      // Sneaky Bits: binary encoding using invisible math operators
+      encodedSmuggle = encodeAsSneakyBits(options.smuggleText);
+      methodDescription = `Sneaky Bits (${options.smuggleText.length} bytes × 8 = ${encodedSmuggle.length} invisible chars)`;
+      break;
+
+    case 'variant':
+      // Variant Selectors: direct byte mapping
+      encodedSmuggle = encodeAsVariantSelectors(options.smuggleText);
+      methodDescription = `Variant Selectors (${encodedSmuggle.length} VS chars for ${options.smuggleText.length} bytes)`;
+      break;
+
+    case 'tags':
+    default:
+      // Unicode Tags: original method with framing
+      // Build spec-compliant tag sequence per Unicode Standard:
+      // - U+E0001 (LANGUAGE TAG) - begins the tag sequence
+      // - U+E0020-U+E007E - tag characters encoding the content
+      // - U+E007F (CANCEL TAG) - terminates the tag sequence
+      const tagContent = encodeAsTagCharacters(options.smuggleText);
+      encodedSmuggle = TAG_BEGIN + tagContent + TAG_CANCEL;
+      methodDescription = `Unicode Tags (U+E0001 BEGIN + ${tagContent.length} content + U+E007F CANCEL)`;
+      break;
+  }
 
   // Use a trailing space as separator so terminal glyphs don't appear to "eat"
   // the last visible character
-  const output = options.plainText + ' ' + tagSequence;
+  //
+  // Note: Many terminals show unknown glyphs for invisible characters - this is
+  // expected. The text is still "hidden" (unreadable). In web/HTML contexts
+  // where smuggling attacks are most dangerous, these characters render invisible.
+  const output = options.plainText + ' ' + encodedSmuggle;
   stdout.write(output + '\n');
 
   // Verbose mode: show encoding details on stderr
   if (options.verbose) {
     stderr.write(`\n${SUCCESS_COLOR}${CHECKMARK} Smuggling complete${RESET_COLOR}\n`);
+    stderr.write(`${YELLOW_COLOR}Method:${RESET_COLOR} ${CYAN_COLOR}${options.method}${RESET_COLOR}\n`);
     stderr.write(`${YELLOW_COLOR}Plain text:${RESET_COLOR} "${MAGENTA_COLOR}${options.plainText}${RESET_COLOR}"\n`);
     stderr.write(`${YELLOW_COLOR}Smuggled text:${RESET_COLOR} "${BLUE_COLOR}${options.smuggleText}${RESET_COLOR}"\n`);
-    stderr.write(`${YELLOW_COLOR}Tag sequence:${RESET_COLOR} ${tagSequence.length} chars (U+E0001 BEGIN + ${encodedSmuggle.length} content + U+E007F CANCEL)\n`);
-    stderr.write(`${YELLOW_COLOR}Total output:${RESET_COLOR} ${output.length} characters (${options.plainText.length} visible + 1 space + ${tagSequence.length} tag)\n`);
+    stderr.write(`${YELLOW_COLOR}Encoding:${RESET_COLOR} ${methodDescription}\n`);
+    stderr.write(`${YELLOW_COLOR}Total output:${RESET_COLOR} ${output.length} characters (${options.plainText.length} visible + 1 space + ${encodedSmuggle.length} hidden)\n`);
   }
 }
 
