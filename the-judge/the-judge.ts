@@ -202,7 +202,7 @@ function buildPrompt(content: string, filename: string, chunk?: Chunk): string {
 
 File: ${filename}${chunkContext}
 
-Analyze this file EXCLUSIVELY for security vulnerabilities. Categorize each finding into one of these categories:
+Analyze this file EXCLUSIVELY for security vulnerabilities. Focus on direct vulnerabilites for the file given the assumption that it will be used as standing agent instructions for coding.  Categorize each finding into one of these categories:
 
 ## SECURITY CATEGORIES
 
