@@ -1,10 +1,10 @@
 #!/usr/bin/env -S npx tsx
 
-import { readFileSync, writeFileSync, existsSync, appendFileSync, unlinkSync } from "fs";
+import { readFileSync, writeFileSync, existsSync } from "fs";
 import { argv, exit, stderr, stdout } from "process";
 import { isatty } from "tty";
-import { tmpdir } from "os";
-import { join } from "path";
+import { join, dirname } from "path";
+import { execSync } from "child_process";
 
 const TOOL_NAME = "ascii-cutterman";
 
@@ -962,9 +962,9 @@ function cleanContent(content: string, strictness: number = 0): {
   return { cleaned, invisibleReplacements, homoglyphReplacements, smugglingSequencesRemoved, smugglingCharactersRemoved, hiddenTexts, smugglingResults };
 }
 
-// Sigil data file helpers
-function getDataFilePath(sigil: string): string {
-  return join(tmpdir(), `guild-${TOOL_NAME}-${sigil}.dat`);
+// Database helpers
+function getGuildDbPath(): string {
+  return join(dirname(new URL(import.meta.url).pathname), '..', 'lib', 'guild-db.ts');
 }
 
 function extractRepoFromPath(filepath: string): string {
@@ -972,59 +972,108 @@ function extractRepoFromPath(filepath: string): string {
   return match ? match[1] : "unknown";
 }
 
-function recordData(sigil: string, filepath: string, hasSmugglingIssues: boolean): void {
-  const dataFile = getDataFilePath(sigil);
+interface RecordDataInput {
+  hasSmugglingIssues: boolean;
+  hasSuspiciousEncodings: boolean;
+  invisibleReplacements: number;
+  homoglyphReplacements: number;
+  smugglingResults: SmugglingResult[];
+}
+
+function recordData(sigil: string, filepath: string, data: RecordDataInput): void {
+  const guildDb = getGuildDbPath();
+  if (!existsSync(guildDb)) return;
+
   const repo = extractRepoFromPath(filepath);
-  // Format: repo|has_smuggling (1 or 0)
-  const record = `${repo}|${hasSmugglingIssues ? 1 : 0}\n`;
-  appendFileSync(dataFile, record);
+
+  // Build scan data
+  const scanData = {
+    sigil,
+    repo,
+    filepath,
+    has_smuggling: data.hasSmugglingIssues ? 1 : 0,
+    has_suspicious_encodings: data.hasSuspiciousEncodings ? 1 : 0,
+    invisible_replacements: data.invisibleReplacements,
+    homoglyph_replacements: data.homoglyphReplacements
+  };
+
+  // Build findings array
+  const findings = data.smugglingResults.map(r => ({
+    method: r.method,
+    hidden_text: r.text,
+    char_count: r.charCount
+  }));
+
+  const insertData = {
+    scan: scanData,
+    findings: findings
+  };
+
+  try {
+    // Use stdin to avoid shell quoting issues with special characters in hidden_text
+    const jsonData = JSON.stringify(insertData);
+    execSync(
+      `npx tsx "${guildDb}" insert-with-findings ascii-cutterman -`,
+      { input: jsonData, stdio: ['pipe', 'pipe', 'pipe'], encoding: 'utf-8' }
+    );
+  } catch {
+    // Silently fail - don't break the scan if DB write fails
+  }
 }
 
 function generateReport(sigil: string): string {
-  const dataFile = getDataFilePath(sigil);
-  if (!existsSync(dataFile)) {
+  const guildDb = getGuildDbPath();
+  if (!existsSync(guildDb)) return "";
+
+  try {
+    // Query scans for this sigil
+    const scansResult = execSync(
+      `npx tsx "${guildDb}" query-scans ascii-cutterman '${sigil}'`,
+      { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+    );
+
+    const scans = JSON.parse(scansResult.trim()) as Array<{
+      repo: string;
+      has_smuggling: number;
+    }>;
+
+    if (scans.length === 0) return "";
+
+    // Aggregate by repo
+    const repoStats = new Map<string, { total: number; smuggling: number }>();
+    for (const scan of scans) {
+      if (!repoStats.has(scan.repo)) {
+        repoStats.set(scan.repo, { total: 0, smuggling: 0 });
+      }
+      const stats = repoStats.get(scan.repo)!;
+      stats.total++;
+      if (scan.has_smuggling) {
+        stats.smuggling++;
+      }
+    }
+
+    const totalRepos = repoStats.size;
+    let totalFiles = 0;
+    let totalSmuggling = 0;
+
+    for (const stats of repoStats.values()) {
+      totalFiles += stats.total;
+      totalSmuggling += stats.smuggling;
+    }
+
+    if (totalRepos === 0) return "";
+
+    const avgFilesPerRepo = Math.round(totalFiles / totalRepos);
+
+    let report = `  Repos analyzed: ${totalRepos}\n`;
+    report += `  Total files scanned: ${totalFiles}\n`;
+    report += `  Average files per repo: ${avgFilesPerRepo}\n`;
+    report += `  Files with smuggling detected: ${totalSmuggling}`;
+
+    return report;
+  } catch {
     return "";
   }
-
-  const content = readFileSync(dataFile, 'utf-8');
-  const lines = content.trim().split('\n').filter(l => l);
-
-  const repoStats = new Map<string, { total: number; smuggling: number }>();
-
-  for (const line of lines) {
-    const [repo, smugglingFlag] = line.split('|');
-    if (!repoStats.has(repo)) {
-      repoStats.set(repo, { total: 0, smuggling: 0 });
-    }
-    const stats = repoStats.get(repo)!;
-    stats.total++;
-    if (smugglingFlag === '1') {
-      stats.smuggling++;
-    }
-  }
-
-  const totalRepos = repoStats.size;
-  let totalFiles = 0;
-  let totalSmuggling = 0;
-
-  for (const stats of repoStats.values()) {
-    totalFiles += stats.total;
-    totalSmuggling += stats.smuggling;
-  }
-
-  // Cleanup
-  unlinkSync(dataFile);
-
-  if (totalRepos === 0) return "";
-
-  const avgFilesPerRepo = Math.round(totalFiles / totalRepos);
-
-  let report = `  Repos analyzed: ${totalRepos}\n`;
-  report += `  Total files scanned: ${totalFiles}\n`;
-  report += `  Average files per repo: ${avgFilesPerRepo}\n`;
-  report += `  Files with smuggling detected: ${totalSmuggling}`;
-
-  return report;
 }
 
 function usage() {
@@ -1356,7 +1405,20 @@ function main() {
 
     // Record data if sigil provided
     if (options.sigil) {
-      recordData(options.sigil, options.filename!, smugglingCharactersRemoved > 0 || hasSuspiciousEncodings);
+      // Calculate total counts from replacement maps
+      let totalInvisibleReplacements = 0;
+      invisibleReplacements.forEach(info => { totalInvisibleReplacements += info.count; });
+
+      let totalHomoglyphReplacements = 0;
+      homoglyphReplacements.forEach(info => { totalHomoglyphReplacements += info.count; });
+
+      recordData(options.sigil, options.filename!, {
+        hasSmugglingIssues: smugglingCharactersRemoved > 0,
+        hasSuspiciousEncodings,
+        invisibleReplacements: totalInvisibleReplacements,
+        homoglyphReplacements: totalHomoglyphReplacements,
+        smugglingResults
+      });
     }
 
     // Exit with appropriate code:

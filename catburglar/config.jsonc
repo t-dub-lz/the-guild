@@ -5,5 +5,29 @@
   "scanAllText": false,
   // Doesn't need individual files, operates exclusively on the repo itself via
   // Github API calls.
-  "repositoryScope": true
+  "repositoryScope": true,
+
+  "dbSchema": {
+    "scans": {
+      "tableName": "catburglar_scans",
+      "columns": [
+        { "name": "repo", "type": "TEXT", "required": true },
+        { "name": "total_prs", "type": "INTEGER", "required": true, "default": 0 },
+        { "name": "failing_prs", "type": "INTEGER", "required": true, "default": 0 },
+        { "name": "snyk_blocked", "type": "INTEGER", "required": true, "default": 0 }
+      ],
+      "indexes": ["repo", "snyk_blocked"]
+    },
+    "findings": {
+      "tableName": "catburglar_findings",
+      "columns": [
+        { "name": "pr_number", "type": "INTEGER", "required": true },
+        { "name": "pr_title", "type": "TEXT", "required": false },
+        { "name": "pr_url", "type": "TEXT", "required": false },
+        { "name": "check_name", "type": "TEXT", "required": true },
+        { "name": "check_state", "type": "TEXT", "required": true }
+      ],
+      "indexes": ["pr_number"]
+    }
+  }
 }

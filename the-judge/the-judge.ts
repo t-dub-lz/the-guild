@@ -1,9 +1,9 @@
 #!/usr/bin/env -S npx tsx
 
-import { readFileSync, existsSync, appendFileSync, unlinkSync, lstatSync, readlinkSync } from "fs";
+import { readFileSync, existsSync, lstatSync, readlinkSync } from "fs";
 import { argv, exit, stderr, stdout, env } from "process";
-import { tmpdir } from "os";
-import { join, basename } from "path";
+import { join, basename, dirname } from "path";
+import { execSync } from "child_process";
 import OpenAI from "openai";
 
 const TOOL_NAME = "the-judge";
@@ -73,16 +73,6 @@ interface AnalysisResult {
   riskScore: 'critical' | 'high' | 'medium' | 'low' | 'clean';
 }
 
-interface SigilData {
-  repo: string;
-  filepath: string;
-  securityIssues: number;
-  criticalCount: number;
-  highCount: number;
-  mediumCount: number;
-  lowCount: number;
-  riskScore: string;
-}
 
 interface ParsedArgs {
   filename?: string;
@@ -449,11 +439,11 @@ function getSeverityColor(severity: string): string {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SIGIL DATA FUNCTIONS
+// DATABASE FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════
 
-function getDataFilePath(sigil: string): string {
-  return join(tmpdir(), `guild-${TOOL_NAME}-${sigil}.dat`);
+function getGuildDbPath(): string {
+  return join(dirname(new URL(import.meta.url).pathname), '..', 'lib', 'guild-db.ts');
 }
 
 function extractRepoFromPath(filepath: string): string {
@@ -461,73 +451,131 @@ function extractRepoFromPath(filepath: string): string {
   return match ? match[1] : "unknown";
 }
 
-function recordData(sigil: string, data: SigilData): void {
-  const dataFile = getDataFilePath(sigil);
-  const record = JSON.stringify(data) + '\n';
-  appendFileSync(dataFile, record);
+interface RecordDataInput {
+  repo: string;
+  filepath: string;
+  securityIssues: number;
+  riskScore: string;
+  summary: string;
+  findings: Finding[];
+}
+
+function recordData(sigil: string, data: RecordDataInput): void {
+  const guildDb = getGuildDbPath();
+  if (!existsSync(guildDb)) return;
+
+  // Build scan data
+  const scanData = {
+    sigil,
+    repo: data.repo,
+    filepath: data.filepath,
+    security_issues: data.securityIssues,
+    risk_score: data.riskScore,
+    summary: data.summary
+  };
+
+  // Build findings array
+  const findings = data.findings.map(f => ({
+    severity: f.severity,
+    category: f.category,
+    description: f.description,
+    line_number: f.line ?? null,
+    evidence: f.evidence ?? null,
+    recommendation: f.recommendation ?? null
+  }));
+
+  const insertData = {
+    scan: scanData,
+    findings: findings
+  };
+
+  try {
+    const jsonData = JSON.stringify(insertData);
+    execSync(
+      `npx tsx "${guildDb}" insert-with-findings the-judge -`,
+      { input: jsonData, stdio: ['pipe', 'pipe', 'pipe'], encoding: 'utf-8' }
+    );
+  } catch {
+    // Silently fail - don't break the scan if DB write fails
+  }
+}
+
+interface ScanRecord {
+  id: number;
+  sigil: string;
+  repo: string;
+  filepath: string;
+  security_issues: number;
+  risk_score: string;
+  summary: string;
+}
+
+interface FindingRecord {
+  id: number;
+  scan_id: number;
+  severity: string;
+  category: string;
+  description: string;
+  line_number: number | null;
+  evidence: string | null;
+  recommendation: string | null;
 }
 
 function generateReport(sigil: string): string {
-  const dataFile = getDataFilePath(sigil);
-  if (!existsSync(dataFile)) return "";
+  const guildDb = getGuildDbPath();
+  if (!existsSync(guildDb)) return "";
 
-  const content = readFileSync(dataFile, 'utf-8');
-  const lines = content.trim().split('\n').filter(l => l);
+  try {
+    // Query scans
+    const scansResult = execSync(
+      `npx tsx "${guildDb}" query-scans the-judge '${sigil}'`,
+      { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+    );
+    const scans: ScanRecord[] = JSON.parse(scansResult.trim());
 
-  let totalFiles = 0;
-  let filesWithIssues = 0;
-  let filesCritical = 0;
-  let filesClean = 0;
-  let totalCritical = 0;
-  let totalHigh = 0;
-  let totalMedium = 0;
-  let totalLow = 0;
-  const reposAnalyzed = new Set<string>();
+    // Query findings
+    const findingsResult = execSync(
+      `npx tsx "${guildDb}" query-findings the-judge '${sigil}'`,
+      { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+    );
+    const findings: FindingRecord[] = JSON.parse(findingsResult.trim());
 
-  for (const line of lines) {
-    try {
-      const data: SigilData = JSON.parse(line);
-      totalFiles++;
-      reposAnalyzed.add(data.repo);
+    if (scans.length === 0) return "";
 
-      if (data.securityIssues > 0) filesWithIssues++;
-      if (data.riskScore === 'critical') filesCritical++;
-      if (data.riskScore === 'clean') filesClean++;
+    // Aggregate data
+    const totalFiles = scans.length;
+    const reposAnalyzed = new Set(scans.map(s => s.repo));
+    const filesWithIssues = scans.filter(s => s.security_issues > 0).length;
+    const filesCritical = scans.filter(s => s.risk_score === 'critical').length;
+    const filesClean = scans.filter(s => s.risk_score === 'clean').length;
 
-      totalCritical += data.criticalCount;
-      totalHigh += data.highCount;
-      totalMedium += data.mediumCount;
-      totalLow += data.lowCount;
-    } catch {
-      // Skip malformed lines
+    const totalCritical = findings.filter(f => f.severity === 'critical').length;
+    const totalHigh = findings.filter(f => f.severity === 'high').length;
+    const totalMedium = findings.filter(f => f.severity === 'medium').length;
+    const totalLow = findings.filter(f => f.severity === 'low').length;
+    const totalIssues = findings.length;
+
+    let report = `  ${GAVEL} Security Analysis Complete\n`;
+    report += `  ─────────────────────────────────────\n`;
+    report += `  Files Analyzed: ${BLUE_COLOR}${totalFiles}${RESET_COLOR}\n`;
+    report += `  Repositories: ${BLUE_COLOR}${reposAnalyzed.size}${RESET_COLOR}\n`;
+    report += `\n`;
+    report += `  ${SUCCESS_COLOR}${CHECKMARK} Clean:${RESET_COLOR} ${filesClean} files\n`;
+    report += `  ${FAIL_COLOR}${XMARK} Issues:${RESET_COLOR} ${filesWithIssues} files (${totalIssues} total findings)\n`;
+    if (filesCritical > 0) {
+      report += `  ${CRITICAL_BG} CRITICAL ${RESET_COLOR}: ${filesCritical} files need immediate attention\n`;
     }
+    report += `\n`;
+    report += `  Severity Breakdown:\n`;
+    report += `    ${CRITICAL_BG} CRITICAL ${RESET_COLOR}: ${totalCritical}\n`;
+    report += `    ${FAIL_COLOR}High${RESET_COLOR}: ${totalHigh}\n`;
+    report += `    ${YELLOW_COLOR}Medium${RESET_COLOR}: ${totalMedium}\n`;
+    report += `    ${CYAN_COLOR}Low${RESET_COLOR}: ${totalLow}`;
+
+    return report;
+  } catch {
+    return "";
   }
-
-  // Cleanup
-  unlinkSync(dataFile);
-
-  if (totalFiles === 0) return "";
-
-  const totalIssues = totalCritical + totalHigh + totalMedium + totalLow;
-
-  let report = `  ${GAVEL} Security Analysis Complete\n`;
-  report += `  ─────────────────────────────────────\n`;
-  report += `  Files Analyzed: ${BLUE_COLOR}${totalFiles}${RESET_COLOR}\n`;
-  report += `  Repositories: ${BLUE_COLOR}${reposAnalyzed.size}${RESET_COLOR}\n`;
-  report += `\n`;
-  report += `  ${SUCCESS_COLOR}${CHECKMARK} Clean:${RESET_COLOR} ${filesClean} files\n`;
-  report += `  ${FAIL_COLOR}${XMARK} Issues:${RESET_COLOR} ${filesWithIssues} files (${totalIssues} total findings)\n`;
-  if (filesCritical > 0) {
-    report += `  ${CRITICAL_BG} CRITICAL ${RESET_COLOR}: ${filesCritical} files need immediate attention\n`;
-  }
-  report += `\n`;
-  report += `  Severity Breakdown:\n`;
-  report += `    ${CRITICAL_BG} CRITICAL ${RESET_COLOR}: ${totalCritical}\n`;
-  report += `    ${FAIL_COLOR}High${RESET_COLOR}: ${totalHigh}\n`;
-  report += `    ${YELLOW_COLOR}Medium${RESET_COLOR}: ${totalMedium}\n`;
-  report += `    ${CYAN_COLOR}Low${RESET_COLOR}: ${totalLow}`;
-
-  return report;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -800,17 +848,14 @@ async function main(): Promise<void> {
 
   // Record data if sigil provided
   if (options.sigil) {
-    const sigilData: SigilData = {
+    recordData(options.sigil, {
       repo: extractRepoFromPath(options.filename),
       filepath: options.filename,
       securityIssues: result.security.length,
-      criticalCount: severities.critical,
-      highCount: severities.high,
-      mediumCount: severities.medium,
-      lowCount: severities.low,
       riskScore: result.riskScore,
-    };
-    recordData(options.sigil, sigilData);
+      summary: result.summary,
+      findings: result.security
+    });
   }
 
   // Output results

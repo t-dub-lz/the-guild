@@ -21,6 +21,10 @@ set -euo pipefail
 # Tool identification
 TOOL_NAME="catburglar"
 
+# Guild DB path
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GUILD_DB="${SCRIPT_DIR}/../lib/guild-db.ts"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -227,53 +231,31 @@ output_details() {
 # Generate and output the aggregated report
 generate_report() {
     local sigil="$1"
-    local data_file="/tmp/guild-${TOOL_NAME}-${sigil}.dat"
 
-    if [[ ! -f "$data_file" ]]; then
+    if [[ ! -f "$GUILD_DB" ]]; then
         echo "No data collected for this session."
         return
     fi
 
-    # Read and aggregate data
-    local total_repos=0
-    local total_prs=0
-    local total_failing=0
-    local total_snyk=0
-    local repos_with_snyk_issues=0
-    local snyk_blocked_repos=()
-    local snyk_blocked_counts=()
-    local snyk_blocked_details=()
-    local seen_repos=()
+    # Query scans from database
+    local scans_json
+    scans_json=$(npx tsx "$GUILD_DB" query-scans catburglar "$sigil" 2>/dev/null || echo "[]")
 
-    while IFS='|' read -r repo prs failing snyk details; do
-        [[ -z "$repo" ]] && continue
+    if [[ "$scans_json" == "[]" ]]; then
+        echo "No data collected for this session."
+        return
+    fi
 
-        # Skip duplicate repos (prevents double-reporting if same repo analyzed twice)
-        local is_duplicate=false
-        for seen in "${seen_repos[@]}"; do
-            if [[ "$seen" == "$repo" ]]; then
-                is_duplicate=true
-                break
-            fi
-        done
-        if [[ "$is_duplicate" == true ]]; then
-            continue
-        fi
-        seen_repos+=("$repo")
+    # Query findings from database
+    local findings_json
+    findings_json=$(npx tsx "$GUILD_DB" query-findings catburglar "$sigil" 2>/dev/null || echo "[]")
 
-        total_repos=$((total_repos + 1))
-        total_prs=$((total_prs + ${prs:-0}))
-        total_failing=$((total_failing + ${failing:-0}))
-        total_snyk=$((total_snyk + ${snyk:-0}))
-
-        if [[ "${snyk:-0}" -gt 0 ]]; then
-            repos_with_snyk_issues=$((repos_with_snyk_issues + 1))
-            # Use array indices to avoid delimiter conflicts in JSON (which contains colons in URLs)
-            snyk_blocked_repos+=("$repo")
-            snyk_blocked_counts+=("$snyk")
-            snyk_blocked_details+=("$details")
-        fi
-    done < "$data_file"
+    # Aggregate data using jq
+    local total_repos total_prs total_failing total_snyk
+    total_repos=$(echo "$scans_json" | jq '[.[].repo] | unique | length' 2>/dev/null || echo "0")
+    total_prs=$(echo "$scans_json" | jq '[.[].total_prs] | add // 0' 2>/dev/null || echo "0")
+    total_failing=$(echo "$scans_json" | jq '[.[].failing_prs] | add // 0' 2>/dev/null || echo "0")
+    total_snyk=$(echo "$scans_json" | jq '[.[].snyk_blocked] | add // 0' 2>/dev/null || echo "0")
 
     # Output summary
     printf "\n"
@@ -292,18 +274,19 @@ generate_report() {
         printf "\n${RED}${BOLD}Snyk-Blocked PRs by Repository:${NC}\n"
         printf "────────────────────────────────────────────────────\n"
 
-        for i in "${!snyk_blocked_repos[@]}"; do
-            local repo="${snyk_blocked_repos[$i]}"
-            local count="${snyk_blocked_counts[$i]}"
-            local details="${snyk_blocked_details[$i]}"
+        # Get repos with snyk issues
+        local repos_with_issues
+        repos_with_issues=$(echo "$scans_json" | jq -r '[.[] | select(.snyk_blocked > 0)] | unique_by(.repo) | .[].repo' 2>/dev/null || true)
+
+        for repo in $repos_with_issues; do
+            local count pr_findings
+            count=$(echo "$scans_json" | jq -r --arg r "$repo" '[.[] | select(.repo == $r)] | .[0].snyk_blocked // 0' 2>/dev/null || echo "0")
+            pr_findings=$(echo "$findings_json" | jq -r --arg r "$repo" '[.[] | select(.repo == $r)]' 2>/dev/null || echo "[]")
 
             printf "\n${MAGENTA}%s${NC} (${RED}%s blocked${NC}):\n" "$repo" "$count"
-            echo "$details" | jq -r '.[] | "  • PR #\(.pr_number): \(.title[0:50])...\n    \(.url)"' 2>/dev/null || true
+            echo "$pr_findings" | jq -r '.[] | "  • PR #\(.pr_number): \(.pr_title[0:50])...\n    \(.pr_url)"' 2>/dev/null || true
         done
     fi
-
-    # Clean up the data file
-    rm -f "$data_file"
 }
 
 # Parse command line arguments
@@ -399,11 +382,18 @@ main() {
     local total_prs failing_prs snyk_blocked snyk_details
     IFS='|' read -r total_prs failing_prs snyk_blocked snyk_details <<< "$result"
 
-    # Record to sigil data file for later aggregation
-    if [[ -n "$SIGIL" ]]; then
-        local data_file="/tmp/guild-${TOOL_NAME}-${SIGIL}.dat"
-        # Store: repo|total_prs|failing_prs|snyk_blocked|snyk_details_json
-        printf "%s|%s|%s|%s|%s\n" "$repo_name" "$total_prs" "$failing_prs" "$snyk_blocked" "$snyk_details" >> "$data_file"
+    # Record to guild database
+    if [[ -n "$SIGIL" && -f "$GUILD_DB" ]]; then
+        # Transform snyk_details to findings format
+        local findings_json
+        findings_json=$(echo "$snyk_details" | jq '[.[] | {pr_number: .pr_number, pr_title: .title, pr_url: .url, check_name: .check, check_state: .state}]' 2>/dev/null || echo "[]")
+
+        local insert_data
+        insert_data=$(cat <<EOF
+{"scan":{"sigil":"${SIGIL}","repo":"${repo_name}","total_prs":${total_prs:-0},"failing_prs":${failing_prs:-0},"snyk_blocked":${snyk_blocked:-0}},"findings":${findings_json}}
+EOF
+)
+        npx tsx "$GUILD_DB" insert-with-findings catburglar - <<< "$insert_data" >/dev/null 2>&1 || true
     fi
 
     # Output based on mode

@@ -103,5 +103,31 @@
     ".prompts/*"
   ],
   "scanAllText": false,
-  "ignoreAll": true
+  "ignoreAll": true,
+
+  "dbSchema": {
+    "scans": {
+      "tableName": "the_judge_scans",
+      "columns": [
+        { "name": "repo", "type": "TEXT", "required": true },
+        { "name": "filepath", "type": "TEXT", "required": true },
+        { "name": "security_issues", "type": "INTEGER", "required": true, "default": 0 },
+        { "name": "risk_score", "type": "TEXT", "required": true },
+        { "name": "summary", "type": "TEXT", "required": false }
+      ],
+      "indexes": ["repo", "risk_score"]
+    },
+    "findings": {
+      "tableName": "the_judge_findings",
+      "columns": [
+        { "name": "severity", "type": "TEXT", "required": true },
+        { "name": "category", "type": "TEXT", "required": true },
+        { "name": "description", "type": "TEXT", "required": true },
+        { "name": "line_number", "type": "INTEGER", "required": false },
+        { "name": "evidence", "type": "TEXT", "required": false },
+        { "name": "recommendation", "type": "TEXT", "required": false }
+      ],
+      "indexes": ["severity", "category"]
+    }
+  }
 }

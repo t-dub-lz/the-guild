@@ -21,8 +21,11 @@ DETAILS_ONLY=false
 PREFIX=""
 SIGIL=""
 REPORT_MODE=false
-DATA_FILE=""
 TOOL_NAME="secretary"
+
+# Guild DB path
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GUILD_DB="${SCRIPT_DIR}/../lib/guild-db.ts"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -50,7 +53,6 @@ while [[ $# -gt 0 ]]; do
         -g)
             if [[ -n "$2" && "$2" != -* ]]; then
                 SIGIL="$2"
-                DATA_FILE="/tmp/guild-${TOOL_NAME}-${SIGIL}.dat"
                 shift 2
             else
                 shift
@@ -59,7 +61,6 @@ while [[ $# -gt 0 ]]; do
         -r)
             if [[ -n "$2" && "$2" != -* ]]; then
                 SIGIL="$2"
-                DATA_FILE="/tmp/guild-${TOOL_NAME}-${SIGIL}.dat"
                 REPORT_MODE=true
                 shift 2
             else
@@ -95,67 +96,53 @@ extract_repo_from_path() {
     fi
 }
 
-# Record data for sigil-based reporting
+# Record data to guild database
 record_data() {
     local file="$1"
     local file_size="$2"
-    local over_threshold="$3"
+    local line_count="$3"
+    local over_threshold="$4"
 
-    if [[ -n "$SIGIL" && -n "$DATA_FILE" ]]; then
+    if [[ -n "$SIGIL" && -f "$GUILD_DB" ]]; then
         local repo=$(extract_repo_from_path "$file")
-        # Append: repo|file_count|size|over_threshold_flag
-        echo "${repo}|1|${file_size}|${over_threshold}" >> "$DATA_FILE"
+        local json_data=$(cat <<EOF
+{"sigil":"${SIGIL}","repo":"${repo}","filepath":"${file}","file_size":${file_size},"line_count":${line_count},"over_threshold":${over_threshold}}
+EOF
+)
+        npx tsx "$GUILD_DB" insert-scan secretary "$json_data" >/dev/null 2>&1 || true
     fi
 }
 
 # Handle report mode (-r)
 if [[ "$REPORT_MODE" == true ]]; then
-    if [[ ! -f "$DATA_FILE" ]]; then
-        # No data collected - exit silently
+    if [[ -z "$SIGIL" || ! -f "$GUILD_DB" ]]; then
+        # No sigil or no DB - exit silently
         exit 0
     fi
 
-    # Read and aggregate data
-    # Data format: repo_path|file_count|total_size|over_threshold_count
-    declare -A repo_files
-    declare -A repo_sizes
-    declare -A repo_over_threshold
-    total_repos=0
-
-    while IFS='|' read -r repo files size over; do
-        if [[ -z "${repo_files[$repo]}" ]]; then
-            ((total_repos++))
-            repo_files[$repo]=0
-            repo_sizes[$repo]=0
-            repo_over_threshold[$repo]=0
-        fi
-        repo_files[$repo]=$((repo_files[$repo] + files))
-        repo_sizes[$repo]=$((repo_sizes[$repo] + size))
-        repo_over_threshold[$repo]=$((repo_over_threshold[$repo] + over))
-    done < "$DATA_FILE"
-
-    # Calculate aggregates
-    total_files=0
-    total_size=0
-    total_over=0
-    for repo in "${!repo_files[@]}"; do
-        total_files=$((total_files + repo_files[$repo]))
-        total_size=$((total_size + repo_sizes[$repo]))
-        total_over=$((total_over + repo_over_threshold[$repo]))
-    done
-
-    # Output report
-    if [[ $total_repos -gt 0 && $total_files -gt 0 ]]; then
-        avg_files=$((total_files / total_repos))
-        avg_size=$((total_size / total_files))
-
-        echo "  Average files per repo: ${avg_files}"
-        echo "  Average file size: ${avg_size} bytes"
-        echo "  Files over ${LINE_THRESHOLD} lines: ${total_over}"
+    # Query scans from database
+    scans_json=$(npx tsx "$GUILD_DB" query-scans secretary "$SIGIL" 2>/dev/null)
+    if [[ -z "$scans_json" || "$scans_json" == "[]" ]]; then
+        exit 0
     fi
 
-    # Cleanup
-    rm -f "$DATA_FILE"
+    # Use jq to aggregate data
+    if command -v jq &>/dev/null; then
+        total_files=$(echo "$scans_json" | jq 'length')
+        total_repos=$(echo "$scans_json" | jq '[.[].repo] | unique | length')
+        total_size=$(echo "$scans_json" | jq '[.[].file_size] | add // 0')
+        total_over=$(echo "$scans_json" | jq '[.[].over_threshold] | add // 0')
+
+        if [[ $total_repos -gt 0 && $total_files -gt 0 ]]; then
+            avg_files=$((total_files / total_repos))
+            avg_size=$((total_size / total_files))
+
+            echo "  Average files per repo: ${avg_files}"
+            echo "  Average file size: ${avg_size} bytes"
+            echo "  Files over ${LINE_THRESHOLD} lines: ${total_over}"
+        fi
+    fi
+
     exit 0
 fi
 
@@ -185,7 +172,7 @@ FILE_SIZE=$(stat -c%s "$FILE" 2>/dev/null || stat -f%z "$FILE" 2>/dev/null || ec
 # Check threshold
 if [[ $LINE_COUNT -gt $LINE_THRESHOLD ]]; then
     # Record data (1 = over threshold)
-    record_data "$FILE" "$FILE_SIZE" 1
+    record_data "$FILE" "$FILE_SIZE" "$LINE_COUNT" 1
 
     # File exceeds threshold - report issue
     if [[ "$SILENT" != true && "$QUIET" != true ]]; then
@@ -198,7 +185,7 @@ if [[ $LINE_COUNT -gt $LINE_THRESHOLD ]]; then
     exit 1
 else
     # Record data (0 = under threshold)
-    record_data "$FILE" "$FILE_SIZE" 0
+    record_data "$FILE" "$FILE_SIZE" "$LINE_COUNT" 0
 
     # File is OK
     exit 0

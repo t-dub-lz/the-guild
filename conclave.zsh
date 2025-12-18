@@ -474,6 +474,74 @@ if [[ ${#EXCLUDED_MEMBERS[@]} -gt 0 ]]; then
 fi
 echo ""
 
+# Initialize database and register member schemas
+init_database() {
+    local lib_dir="$SCRIPT_DIR/lib"
+    local guild_db="$lib_dir/guild-db.ts"
+
+    if [[ ! -f "$guild_db" ]]; then
+        echo "${YELLOW_COLOR}${WARNING_SYMBOL}${RESET_COLOR} Guild database not found, skipping DB init"
+        return 1
+    fi
+
+    # Initialize database (idempotent)
+    npx tsx "$guild_db" init >/dev/null 2>&1 || {
+        echo "${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} Failed to initialize guild database"
+        return 1
+    }
+
+    # Register schemas for all discovered tools
+    for tool in "${tools_list[@]}"; do
+        npx tsx "$guild_db" register "$SCRIPT_DIR/$tool" >/dev/null 2>&1 || true
+    done
+
+    return 0
+}
+
+# Start conclave session in database
+start_conclave_session() {
+    local lib_dir="$SCRIPT_DIR/lib"
+    local guild_db="$lib_dir/guild-db.ts"
+
+    [[ ! -f "$guild_db" ]] && return 1
+
+    # Build members JSON array
+    local members_json=$(printf '%s\n' "${tools_list[@]}" | jq -R . | jq -s . 2>/dev/null)
+
+    # Build excluded members JSON array (if any)
+    local excluded_json="null"
+    if [[ ${#EXCLUDED_MEMBERS[@]} -gt 0 ]]; then
+        excluded_json=$(printf '%s\n' "${EXCLUDED_MEMBERS[@]}" | jq -R . | jq -s . 2>/dev/null)
+    fi
+
+    # Build config JSON
+    local config_json=$(jq -n \
+        --argjson members "$members_json" \
+        --argjson excluded "$excluded_json" \
+        --arg org "${ORG_NAME:-}" \
+        --argjson limit "${REPO_LIMIT:-null}" \
+        --arg strictness "${STRICTNESS_FLAG:-}" \
+        --argjson scan_all "${SCAN_ALL_OVERRIDE:-false}" \
+        --argjson dryrun "${DRYRUN:-false}" \
+        '{
+            members: $members,
+            excluded_members: $excluded,
+            org_name: (if $org == "" then null else $org end),
+            repo_limit: $limit,
+            strictness_flag: (if $strictness == "" then null else $strictness end),
+            scan_all_override: $scan_all,
+            dryrun: $dryrun
+        }' 2>/dev/null)
+
+    npx tsx "$guild_db" start-conclave "$SIGIL" "$config_json" >/dev/null 2>&1
+}
+
+# Initialize database
+if init_database; then
+    echo "${SUCCESS_COLOR}${CHECKMARK}${RESET_COLOR} Guild Database initialized"
+    start_conclave_session
+fi
+
 # Get list of repositories
 if [[ -n "$REPO_LIST" ]]; then
     IFS=',' read -A repo_array <<< "$REPO_LIST"
@@ -767,6 +835,31 @@ if [[ "$DRYRUN" != true ]]; then
             echo "$report_output"
         fi
     done
+fi
+
+# End conclave session in database
+end_conclave_session() {
+    local lib_dir="$SCRIPT_DIR/lib"
+    local guild_db="$lib_dir/guild-db.ts"
+
+    [[ ! -f "$guild_db" ]] && return 1
+
+    local stats_json=$(jq -n \
+        --argjson repo_count "$total_repos" \
+        --argjson repos_with_issues "$repos_with_issues" \
+        --argjson total_files "$total_files_scanned" \
+        '{
+            repo_count: $repo_count,
+            repos_with_issues: $repos_with_issues,
+            total_files_scanned: $total_files
+        }' 2>/dev/null)
+
+    npx tsx "$guild_db" end-conclave "$SIGIL" "$stats_json" >/dev/null 2>&1
+}
+
+# End the conclave session (skip in dryrun mode)
+if [[ "$DRYRUN" != true ]]; then
+    end_conclave_session
 fi
 
 # Final summary

@@ -1,0 +1,22 @@
+{
+  "name": "guild-db",
+  "version": "1.0.0",
+  "description": "SQLite database library for The Guild",
+  "type": "module",
+  "main": "guild-db.ts",
+  "bin": {
+    "guild-db": "./guild-db.ts"
+  },
+  "scripts": {
+    "test": "npx tsx guild-db.ts init && echo 'Init successful'"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.6.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

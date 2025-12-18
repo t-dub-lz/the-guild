@@ -3,5 +3,29 @@
   "description": "Detects Unicode smuggling, invisible chars, and homoglyphs",
   "patterns": ["*.md", "*.txt"],
   "scanAllText": false,
-  "ignoreAll": false
+  "ignoreAll": false,
+
+  "dbSchema": {
+    "scans": {
+      "tableName": "ascii_cutterman_scans",
+      "columns": [
+        { "name": "repo", "type": "TEXT", "required": true },
+        { "name": "filepath", "type": "TEXT", "required": true },
+        { "name": "has_smuggling", "type": "INTEGER", "required": true, "default": 0 },
+        { "name": "has_suspicious_encodings", "type": "INTEGER", "required": false, "default": 0 },
+        { "name": "invisible_replacements", "type": "INTEGER", "required": false, "default": 0 },
+        { "name": "homoglyph_replacements", "type": "INTEGER", "required": false, "default": 0 }
+      ],
+      "indexes": ["repo", "has_smuggling"]
+    },
+    "findings": {
+      "tableName": "ascii_cutterman_findings",
+      "columns": [
+        { "name": "method", "type": "TEXT", "required": true },
+        { "name": "hidden_text", "type": "TEXT", "required": true },
+        { "name": "char_count", "type": "INTEGER", "required": true }
+      ],
+      "indexes": ["method"]
+    }
+  }
 }
