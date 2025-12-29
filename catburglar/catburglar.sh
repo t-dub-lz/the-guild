@@ -206,8 +206,8 @@ analyze_single_repo() {
       select(.name != null and (.name | ascii_downcase | contains("snyk")) and .conclusion != null and .conclusion != "SUCCESS" and .conclusion != "SKIPPED") |
       {pr_number: $pr.number, title: $pr.title, url: $pr.url, check: .name, state: .conclusion}]' "$data_file" 2>/dev/null || echo "[]")
 
-    # Combine Snyk failures
-    snyk_details=$(echo "$snyk_status $snyk_checkruns" | jq -s 'add // [] | unique_by(.pr_number)' 2>/dev/null || echo "[]")
+    # Combine Snyk failures (use -c for compact single-line JSON output)
+    snyk_details=$(echo "$snyk_status $snyk_checkruns" | jq -sc 'add // [] | unique_by(.pr_number)' 2>/dev/null || echo "[]")
     snyk_failures=$(echo "$snyk_details" | jq 'length' 2>/dev/null || echo "0")
 
     # Output: total_prs|failing_prs|snyk_blocked_prs|snyk_details_json
@@ -384,9 +384,9 @@ main() {
 
     # Record to guild database
     if [[ -n "$SIGIL" && -f "$GUILD_DB" ]]; then
-        # Transform snyk_details to findings format
+        # Transform snyk_details to findings format (use -c for compact output)
         local findings_json
-        findings_json=$(echo "$snyk_details" | jq '[.[] | {pr_number: .pr_number, pr_title: .title, pr_url: .url, check_name: .check, check_state: .state}]' 2>/dev/null || echo "[]")
+        findings_json=$(echo "$snyk_details" | jq -c '[.[] | {pr_number: .pr_number, pr_title: .title, pr_url: .url, check_name: .check, check_state: .state}]' 2>/dev/null || echo "[]")
 
         local insert_data
         insert_data=$(cat <<EOF

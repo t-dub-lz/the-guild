@@ -402,9 +402,9 @@ function queryFindings(memberName: string, sigil: string): unknown[] {
   const scansTable = `${memberName.replace(/-/g, '_')}_scans`;
   const findingsTable = `${memberName.replace(/-/g, '_')}_findings`;
 
-  // Join findings with scans to get scan context
+  // Join findings with scans to get scan context (only use repo which all tables have)
   const stmt = db.prepare(`
-    SELECT f.*, s.repo, s.filepath
+    SELECT f.*, s.repo
     FROM ${findingsTable} f
     JOIN ${scansTable} s ON f.scan_id = s.id
     WHERE s.sigil = ?

@@ -695,8 +695,8 @@ while IFS= read -r repo; do
                 repo_had_issues=true
                 tool_stats["$tool"]=$((tool_stats["$tool"] + 1))
 
-                # Get detailed output
-                local issues=$("$tool_exe" $STRICTNESS_FLAG -g "$SIGIL" -d --prefix="    " "$repo_path" 2>&1)
+                # Get detailed output (no -g sigil - data already recorded in first call)
+                local issues=$("$tool_exe" $STRICTNESS_FLAG -d --prefix="    " "$repo_path" 2>&1)
                 echo "${FAIL_COLOR}${XMARK}${RESET_COLOR} Issues found"
                 if [[ -n "$issues" ]]; then
                     echo "$issues"
@@ -756,7 +756,8 @@ while IFS= read -r repo; do
             "$1" $2 -g "$3" -nn "{}" 2>/dev/null || exit_code=$?
 
             if [[ $exit_code -eq 1 ]]; then
-                issues=$("$1" $2 -g "$3" -d --prefix="    " "{}" 2>&1)
+                # Get detailed output (no -g sigil - data already recorded above)
+                issues=$("$1" $2 -d --prefix="    " "{}" 2>&1)
                 # Use null byte as record separator to preserve multi-line issues
                 printf "PROBLEM:%s|||%s\0" "{}" "$issues"
             fi
