@@ -23,9 +23,17 @@ STRICTNESS_FLAG=""
 SCAN_ALL_OVERRIDE=false  # -a flag overrides per-tool config
 DRYRUN=false             # -n flag for guild training mode (counts files only)
 EXCLUDED_MEMBERS=()      # -x flag to exclude specific members
+DEBUG=false              # --debug flag for verbose diagnostic output
 
 # Generate unique sigil (UUID) for this session
 SIGIL=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || date +%s%N | sha256sum | cut -c1-36)
+
+# Debug output function - writes to stderr
+debug() {
+    if [[ "$DEBUG" == true ]]; then
+        echo "[DEBUG] $*" >&2
+    fi
+}
 
 # Cleanup function
 cleanup() {
@@ -65,6 +73,7 @@ show_help() {
     echo "  -n              Guild training - count files without running analysis"
     echo "  -s              Strict mode"
     echo "  -S              Super strict mode"
+    echo "  --debug         Enable debug output (to stderr)"
     echo "  -h, --help      Show this help message"
     echo ""
     echo "Arguments:"
@@ -220,20 +229,31 @@ sync_repo() {
     local local_path="$REPOS_DIR/$org/$name"
     local is_orphan=false
 
+    # Debug output goes to stderr to not interfere with return value
+    [[ "$DEBUG" == true ]] && echo "[DEBUG] sync_repo: checking remote for $repo" >&2
+
     # Check if remote exists
     if ! gh repo view "$repo" &>/dev/null 2>&1; then
         is_orphan=true
+        [[ "$DEBUG" == true ]] && echo "[DEBUG] sync_repo: remote not found, marking as orphan" >&2
+    else
+        [[ "$DEBUG" == true ]] && echo "[DEBUG] sync_repo: remote exists" >&2
     fi
+
+    [[ "$DEBUG" == true ]] && echo "[DEBUG] sync_repo: local_path=$local_path" >&2
 
     if [[ -d "$local_path/.git" ]]; then
         # Repo exists locally
+        [[ "$DEBUG" == true ]] && echo "[DEBUG] sync_repo: local repo exists at $local_path" >&2
         if [[ "$is_orphan" == true ]]; then
             echo "ORPHAN"
         else
             # Update existing repo
+            [[ "$DEBUG" == true ]] && echo "[DEBUG] sync_repo: updating existing repo" >&2
             cd "$local_path" || return 1
             local default_branch
             default_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "main")
+            [[ "$DEBUG" == true ]] && echo "[DEBUG] sync_repo: fetching origin, branch=$default_branch" >&2
             git fetch origin --quiet 2>/dev/null
             git reset --hard "origin/$default_branch" --quiet 2>/dev/null
             cd - >/dev/null || return 1
@@ -241,13 +261,16 @@ sync_repo() {
         fi
     elif [[ "$is_orphan" == false ]]; then
         # Clone new repo
+        [[ "$DEBUG" == true ]] && echo "[DEBUG] sync_repo: cloning new repo" >&2
         mkdir -p "$REPOS_DIR/$org"
         if gh repo clone "$repo" "$local_path" -- --quiet 2>/dev/null; then
             echo "CLONED"
         else
+            [[ "$DEBUG" == true ]] && echo "[DEBUG] sync_repo: clone failed" >&2
             echo "FAILED"
         fi
     else
+        [[ "$DEBUG" == true ]] && echo "[DEBUG] sync_repo: skipping (orphan with no local)" >&2
         echo "SKIP"
     fi
 }
@@ -476,6 +499,10 @@ while [[ $# -gt 0 ]]; do
             STRICTNESS_FLAG="-S"
             shift
             ;;
+        --debug)
+            DEBUG=true
+            shift
+            ;;
         -*)
             echo "${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} Unknown option: $1"
             echo "Use -h or --help for usage information"
@@ -563,14 +590,19 @@ if [[ -z "$repos" ]]; then
     exit 1
 fi
 
+debug "Repos to process: $(echo "$repos" | wc -l) repositories"
+debug "First repo: $(echo "$repos" | head -1)"
+
 # Track overall stats
 total_repos=0
 repos_with_issues=0
 total_files_scanned=0
-declare -A repo_issues       # repo -> "count:file1|file2|..."
-declare -A orphan_repos      # track orphaned repos
-declare -A tool_stats        # tool -> "issues_count"
-declare -A tool_file_counts  # tool -> "files_to_check" (for guild training)
+declare -A repo_issues=()    # repo -> "count:file1|file2|..." (currently unused)
+# Initialize empty to avoid "unbound variable" with set -u
+# Bash associative arrays need explicit =() for set -u safety
+declare -A orphan_repos=()   # track orphaned repos
+declare -A tool_stats=()     # tool -> "issues_count"
+declare -A tool_file_counts=() # tool -> "files_to_check" (for guild training)
 
 # Initialize tool stats
 for tool in "${tools_list[@]}"; do
@@ -579,10 +611,13 @@ for tool in "${tools_list[@]}"; do
 done
 
 # Process each repository
+debug "Starting repository processing loop"
 while IFS= read -r repo; do
+    debug "Processing repo: '$repo'"
     [[ -z "$repo" ]] && continue
 
-    ((total_repos++))
+    ((++total_repos))
+    debug "Repo #$total_repos: $repo"
 
     echo ""
     header_text="Repository: ${repo}"
@@ -594,21 +629,29 @@ while IFS= read -r repo; do
     echo "${BLUE_COLOR}${separator_line}${RESET_COLOR}"
 
     # Sync repository (clone or pull)
+    debug "Creating temp file for sync result"
     sync_result_file=$(mktemp)
+    debug "Temp file: $sync_result_file"
 
     # Run sync in background, capture result to temp file
+    debug "Starting sync_repo in background for: $repo"
     (sync_repo "$repo" > "$sync_result_file") &
     sync_pid=$!
+    debug "Sync PID: $sync_pid"
 
     # Show spinner immediately, then update in loop
+    debug "Entering spinner loop"
     while kill -0 "$sync_pid" 2>/dev/null; do
         guild_show_spinner "Syncing repository..."
         sleep 0.1
     done
+    debug "Spinner loop exited"
 
     wait "$sync_pid"
+    debug "Wait completed"
     guild_clear_spinner
     sync_result=$(cat "$sync_result_file")
+    debug "Sync result: $sync_result"
     rm -f "$sync_result_file"
 
     # Handle sync result
@@ -721,7 +764,7 @@ while IFS= read -r repo; do
         rm -f "$files_temp"
 
         total_files=${#files[@]}
-        ((total_files_scanned += total_files))
+        ((total_files_scanned += total_files)) || true
 
         if [[ $total_files -eq 0 ]]; then
             echo "${YELLOW_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} No matching files found"
@@ -800,7 +843,7 @@ while IFS= read -r repo; do
     done
 
     if [[ "$repo_had_issues" == true ]]; then
-        ((repos_with_issues++))
+        ((++repos_with_issues))
     fi
 
 done <<< "$repos"
