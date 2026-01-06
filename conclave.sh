@@ -1,31 +1,22 @@
-#!/usr/bin/env zsh
+#!/usr/bin/env bash
 
 # The Guild Conclave - Multi-tool repository scanner
 # Discovers and runs all Guild Member tools against repositories
 
-# Colors and symbols
-CHECKMARK='✓'
-XMARK='✗'
-DOWN_RIGHT_ARROW="╰─>"
-WARNING_SYMBOL='⚠'
+set -euo pipefail
 
-SUCCESS_COLOR=$'\e[32m'
-FAIL_COLOR=$'\e[31m'
-YELLOW_COLOR=$'\e[33m'
-BLUE_COLOR=$'\e[34m'
-MAGENTA_COLOR=$'\e[35m'
-NEON_GREEN=$'\e[92m'
-CYAN_COLOR=$'\e[36m'
-RESET_COLOR=$'\e[0m'
+# Script directory (bash equivalent of zsh ${0:A:h})
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Spinner animation frames (zsh arrays are 1-indexed)
-SPINNER_FRAMES=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
-SPINNER_INDEX=1
+# Source guild utilities
+source "${SCRIPT_DIR}/lib/guild-utils.sh"
+
+# Load environment variables from .env file
+guild_load_env "${SCRIPT_DIR}/.env"
 
 # Default configuration
 REPO_LIMIT=10000
 ORG_NAME=""
-SCRIPT_DIR="${0:A:h}"  # Directory where this script lives
 REPOS_DIR="$SCRIPT_DIR/.repos"
 PARALLEL_JOBS=10
 STRICTNESS_FLAG=""
@@ -36,55 +27,19 @@ EXCLUDED_MEMBERS=()      # -x flag to exclude specific members
 # Generate unique sigil (UUID) for this session
 SIGIL=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || date +%s%N | sha256sum | cut -c1-36)
 
-# Load environment variables from .env file if it exists
-# This allows Guild members to access secrets like OPENAI_API_KEY
-load_env_file() {
-    local env_file="$SCRIPT_DIR/.env"
-
-    if [[ -f "$env_file" ]]; then
-        # Read .env file line by line
-        while IFS= read -r line || [[ -n "$line" ]]; do
-            # Skip empty lines and comments
-            [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-
-            # Remove leading/trailing whitespace
-            line="${line#"${line%%[![:space:]]*}"}"
-            line="${line%"${line##*[![:space:]]}"}"
-
-            # Skip if not a valid KEY=value format
-            [[ "$line" != *=* ]] && continue
-
-            # Extract key and value
-            local key="${line%%=*}"
-            local value="${line#*=}"
-
-            # Remove surrounding quotes from value if present
-            if [[ "$value" =~ ^\"(.*)\"$ ]] || [[ "$value" =~ ^\'(.*)\'$ ]]; then
-                value="${match[1]}"
-            fi
-
-            # Export the variable
-            export "$key=$value"
-        done < "$env_file"
-    fi
-}
-
-# Load .env before any tool invocations
-load_env_file
-
 # Cleanup function
 cleanup() {
     echo ""
     echo "${YELLOW_COLOR}Cleaning up...${RESET_COLOR}"
 
     # Kill xargs and all its children if it's running
-    if [[ -n "$xargs_pid" ]] && kill -0 "$xargs_pid" 2>/dev/null; then
-        kill -- -$xargs_pid 2>/dev/null || true
+    if [[ -n "${xargs_pid:-}" ]] && kill -0 "$xargs_pid" 2>/dev/null; then
+        kill -- -"$xargs_pid" 2>/dev/null || true
         wait "$xargs_pid" 2>/dev/null || true
     fi
 
     # Kill sync process if it's running
-    if [[ -n "$sync_pid" ]] && kill -0 "$sync_pid" 2>/dev/null; then
+    if [[ -n "${sync_pid:-}" ]] && kill -0 "$sync_pid" 2>/dev/null; then
         kill "$sync_pid" 2>/dev/null || true
         wait "$sync_pid" 2>/dev/null || true
     fi
@@ -96,7 +51,7 @@ trap cleanup INT TERM
 
 # Help function
 show_help() {
-    echo "Usage: conclave.zsh [OPTIONS] [repo1,repo2,...]"
+    echo "Usage: conclave.sh [OPTIONS] [repo1,repo2,...]"
     echo ""
     echo "The Guild Conclave - Multi-tool repository scanner"
     echo "Discovers and runs all Guild Member tools against repositories."
@@ -122,10 +77,9 @@ show_help() {
     exit 0
 }
 
-# Function to clear spinner line
-clear_spinner() {
-    printf "\r\033[K"
-}
+# ═══════════════════════════════════════════════════════════════════════════════
+# TOOL DISCOVERY
+# ═══════════════════════════════════════════════════════════════════════════════
 
 # Discover Guild Member tools
 # Each tool lives in its own folder, with the main executable having the same name as the folder
@@ -136,10 +90,11 @@ discover_tools() {
         local dirname="${dir%/}"
         dirname="${dirname##*/}"
 
-        # Skip hidden dirs, .repos, node_modules
+        # Skip hidden dirs, .repos, node_modules, lib
         [[ "$dirname" == .* ]] && continue
         [[ "$dirname" == "node_modules" ]] && continue
         [[ "$dirname" == ".repos" ]] && continue
+        [[ "$dirname" == "lib" ]] && continue
 
         # Skip excluded members
         is_member_excluded "$dirname" && continue
@@ -178,12 +133,9 @@ get_tool_executable() {
     return 1
 }
 
-# Strip JSONC comments from input
-# Removes // comments on their own lines and /* */ block comments
-strip_jsonc_comments() {
-    local input="$1"
-    echo "$input" | sed -e '/^[[:space:]]*\/\//d' -e 's|/\*.*\*/||g'
-}
+# ═══════════════════════════════════════════════════════════════════════════════
+# TOOL CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════════
 
 # Read tool config value using jq or python fallback (supports JSONC)
 get_tool_config() {
@@ -193,7 +145,7 @@ get_tool_config() {
     local json_content
 
     # Read and strip JSONC comments
-    json_content=$(strip_jsonc_comments "$(cat "$config_file")")
+    json_content=$(guild_strip_jsonc_comments "$(cat "$config_file")")
 
     if command -v jq &>/dev/null; then
         echo "$json_content" | jq -r ".$key // empty" 2>/dev/null
@@ -211,7 +163,7 @@ get_tool_patterns() {
     local json_content
 
     # Read and strip JSONC comments
-    json_content=$(strip_jsonc_comments "$(cat "$config_file")")
+    json_content=$(guild_strip_jsonc_comments "$(cat "$config_file")")
 
     if command -v jq &>/dev/null; then
         echo "$json_content" | jq -r '.patterns[]? // empty' 2>/dev/null
@@ -225,21 +177,24 @@ get_tool_patterns() {
 # Check if tool wants to scan all text files
 tool_scans_all_text() {
     local tool_name="$1"
-    local val=$(get_tool_config "$tool_name" "scanAllText")
+    local val
+    val=$(get_tool_config "$tool_name" "scanAllText")
     [[ "$val" == "true" ]]
 }
 
 # Check if tool ignores the -a (scan all) override
 tool_ignores_all() {
     local tool_name="$1"
-    local val=$(get_tool_config "$tool_name" "ignoreAll")
+    local val
+    val=$(get_tool_config "$tool_name" "ignoreAll")
     [[ "$val" == "true" ]]
 }
 
 # Check if tool operates at repository scope (once per repo, not per file)
 tool_has_repository_scope() {
     local tool_name="$1"
-    local val=$(get_tool_config "$tool_name" "repositoryScope")
+    local val
+    val=$(get_tool_config "$tool_name" "repositoryScope")
     [[ "$val" == "true" ]]
 }
 
@@ -251,6 +206,10 @@ is_member_excluded() {
     done
     return 1
 }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# REPOSITORY SYNC
+# ═══════════════════════════════════════════════════════════════════════════════
 
 # Sync a repository (clone or pull)
 # Returns: CLONED, UPDATED, ORPHAN, or SKIP
@@ -272,11 +231,12 @@ sync_repo() {
             echo "ORPHAN"
         else
             # Update existing repo
-            cd "$local_path"
-            local default_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "main")
+            cd "$local_path" || return 1
+            local default_branch
+            default_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "main")
             git fetch origin --quiet 2>/dev/null
             git reset --hard "origin/$default_branch" --quiet 2>/dev/null
-            cd - >/dev/null
+            cd - >/dev/null || return 1
             echo "UPDATED"
         fi
     elif [[ "$is_orphan" == false ]]; then
@@ -291,6 +251,10 @@ sync_repo() {
         echo "SKIP"
     fi
 }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FILE DISCOVERY
+# ═══════════════════════════════════════════════════════════════════════════════
 
 # Find files matching tool's patterns in a directory
 find_files_for_tool() {
@@ -336,7 +300,99 @@ find_files_for_tool() {
     printf '%s\0' "${files[@]}"
 }
 
-# Parse arguments
+# ═══════════════════════════════════════════════════════════════════════════════
+# DATABASE FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Initialize database and register member schemas
+init_database() {
+    local lib_dir="$SCRIPT_DIR/lib"
+    local guild_db="$lib_dir/guild-db.ts"
+
+    if [[ ! -f "$guild_db" ]]; then
+        echo "${YELLOW_COLOR}${WARNING_SYMBOL}${RESET_COLOR} Guild database not found, skipping DB init"
+        return 1
+    fi
+
+    # Initialize database (idempotent)
+    npx tsx "$guild_db" init >/dev/null 2>&1 || {
+        echo "${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} Failed to initialize guild database"
+        return 1
+    }
+
+    # Register schemas for all discovered tools
+    for tool in "${tools_list[@]}"; do
+        npx tsx "$guild_db" register "$SCRIPT_DIR/$tool" >/dev/null 2>&1 || true
+    done
+
+    return 0
+}
+
+# Start conclave session in database
+start_conclave_session() {
+    local lib_dir="$SCRIPT_DIR/lib"
+    local guild_db="$lib_dir/guild-db.ts"
+
+    [[ ! -f "$guild_db" ]] && return 1
+
+    # Build members JSON array
+    local members_json
+    members_json=$(printf '%s\n' "${tools_list[@]}" | jq -R . | jq -s . 2>/dev/null)
+
+    # Build excluded members JSON array (if any)
+    local excluded_json="null"
+    if [[ ${#EXCLUDED_MEMBERS[@]} -gt 0 ]]; then
+        excluded_json=$(printf '%s\n' "${EXCLUDED_MEMBERS[@]}" | jq -R . | jq -s . 2>/dev/null)
+    fi
+
+    # Build config JSON
+    local config_json
+    config_json=$(jq -n \
+        --argjson members "$members_json" \
+        --argjson excluded "$excluded_json" \
+        --arg org "${ORG_NAME:-}" \
+        --argjson limit "${REPO_LIMIT:-null}" \
+        --arg strictness "${STRICTNESS_FLAG:-}" \
+        --argjson scan_all "${SCAN_ALL_OVERRIDE:-false}" \
+        --argjson dryrun "${DRYRUN:-false}" \
+        '{
+            members: $members,
+            excluded_members: $excluded,
+            org_name: (if $org == "" then null else $org end),
+            repo_limit: $limit,
+            strictness_flag: (if $strictness == "" then null else $strictness end),
+            scan_all_override: $scan_all,
+            dryrun: $dryrun
+        }' 2>/dev/null)
+
+    npx tsx "$guild_db" start-conclave "$SIGIL" "$config_json" >/dev/null 2>&1
+}
+
+# End conclave session in database
+end_conclave_session() {
+    local lib_dir="$SCRIPT_DIR/lib"
+    local guild_db="$lib_dir/guild-db.ts"
+
+    [[ ! -f "$guild_db" ]] && return 1
+
+    local stats_json
+    stats_json=$(jq -n \
+        --argjson repo_count "$total_repos" \
+        --argjson repos_with_issues "$repos_with_issues" \
+        --argjson total_files "$total_files_scanned" \
+        '{
+            repo_count: $repo_count,
+            repos_with_issues: $repos_with_issues,
+            total_files_scanned: $total_files
+        }' 2>/dev/null)
+
+    npx tsx "$guild_db" end-conclave "$SIGIL" "$stats_json" >/dev/null 2>&1
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ARGUMENT PARSING
+# ═══════════════════════════════════════════════════════════════════════════════
+
 REPO_LIST=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -345,7 +401,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         -o)
             if [[ -z "$2" ]]; then
-                echo "${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} -n requires an organization name"
+                echo "${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} -o requires an organization name"
                 exit 1
             fi
             ORG_NAME="$2"
@@ -372,12 +428,13 @@ while [[ $# -gt 0 ]]; do
                 echo "${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} -x requires comma-separated member folder names" >&2
                 exit 1
             fi
-            IFS=',' read -A EXCLUDED_MEMBERS <<< "$2"
+            # Bash uses -a instead of -A for array read
+            IFS=',' read -ra EXCLUDED_MEMBERS <<< "$2"
             # Validate each excluded member exists
             for member in "${EXCLUDED_MEMBERS[@]}"; do
-                local member_dir="$SCRIPT_DIR/$member"
-                local has_config=false
-                local has_exe=false
+                member_dir="$SCRIPT_DIR/$member"
+                has_config=false
+                has_exe=false
                 [[ -f "$member_dir/config.jsonc" ]] && has_config=true
                 for ext in "" ".sh" ".zsh" ".ts" ".py" ".js"; do
                     [[ -f "$member_dir/${member}${ext}" ]] && has_exe=true && break
@@ -387,9 +444,9 @@ while [[ $# -gt 0 ]]; do
                     echo "  Available members:" >&2
                     for dir in "$SCRIPT_DIR"/*/; do
                         [[ ! -d "$dir" ]] && continue
-                        local dirname="${dir%/}"
+                        dirname="${dir%/}"
                         dirname="${dirname##*/}"
-                        [[ "$dirname" == .* || "$dirname" == "node_modules" || "$dirname" == ".repos" ]] && continue
+                        [[ "$dirname" == .* || "$dirname" == "node_modules" || "$dirname" == ".repos" || "$dirname" == "lib" ]] && continue
                         [[ -f "$dir/config.jsonc" ]] || continue
                         for ext in "" ".sh" ".zsh" ".ts" ".py" ".js"; do
                             if [[ -f "$dir${dirname}${ext}" ]]; then
@@ -460,81 +517,19 @@ fi
 
 echo "${SUCCESS_COLOR}${CHECKMARK}${RESET_COLOR} Guild Member(s) Assembled: ${BLUE_COLOR}${#tools_list[@]}${RESET_COLOR}"
 for tool in "${tools_list[@]}"; do
-    local tool_display_name=$(get_tool_config "$tool" "name")
+    tool_display_name=$(get_tool_config "$tool" "name")
     [[ -z "$tool_display_name" ]] && tool_display_name="$tool"
     echo "  ${CYAN_COLOR}${tool_display_name}${RESET_COLOR}"
 done
 if [[ ${#EXCLUDED_MEMBERS[@]} -gt 0 ]]; then
     echo "${YELLOW_COLOR}${WARNING_SYMBOL}${RESET_COLOR} Excluded from conclave: ${BLUE_COLOR}${#EXCLUDED_MEMBERS[@]}${RESET_COLOR}"
     for excluded in "${EXCLUDED_MEMBERS[@]}"; do
-        local excluded_display_name=$(get_tool_config "$excluded" "name")
+        excluded_display_name=$(get_tool_config "$excluded" "name")
         [[ -z "$excluded_display_name" ]] && excluded_display_name="$excluded"
         echo "  ${MAGENTA_COLOR}${excluded_display_name}${RESET_COLOR}"
     done
 fi
 echo ""
-
-# Initialize database and register member schemas
-init_database() {
-    local lib_dir="$SCRIPT_DIR/lib"
-    local guild_db="$lib_dir/guild-db.ts"
-
-    if [[ ! -f "$guild_db" ]]; then
-        echo "${YELLOW_COLOR}${WARNING_SYMBOL}${RESET_COLOR} Guild database not found, skipping DB init"
-        return 1
-    fi
-
-    # Initialize database (idempotent)
-    npx tsx "$guild_db" init >/dev/null 2>&1 || {
-        echo "${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} Failed to initialize guild database"
-        return 1
-    }
-
-    # Register schemas for all discovered tools
-    for tool in "${tools_list[@]}"; do
-        npx tsx "$guild_db" register "$SCRIPT_DIR/$tool" >/dev/null 2>&1 || true
-    done
-
-    return 0
-}
-
-# Start conclave session in database
-start_conclave_session() {
-    local lib_dir="$SCRIPT_DIR/lib"
-    local guild_db="$lib_dir/guild-db.ts"
-
-    [[ ! -f "$guild_db" ]] && return 1
-
-    # Build members JSON array
-    local members_json=$(printf '%s\n' "${tools_list[@]}" | jq -R . | jq -s . 2>/dev/null)
-
-    # Build excluded members JSON array (if any)
-    local excluded_json="null"
-    if [[ ${#EXCLUDED_MEMBERS[@]} -gt 0 ]]; then
-        excluded_json=$(printf '%s\n' "${EXCLUDED_MEMBERS[@]}" | jq -R . | jq -s . 2>/dev/null)
-    fi
-
-    # Build config JSON
-    local config_json=$(jq -n \
-        --argjson members "$members_json" \
-        --argjson excluded "$excluded_json" \
-        --arg org "${ORG_NAME:-}" \
-        --argjson limit "${REPO_LIMIT:-null}" \
-        --arg strictness "${STRICTNESS_FLAG:-}" \
-        --argjson scan_all "${SCAN_ALL_OVERRIDE:-false}" \
-        --argjson dryrun "${DRYRUN:-false}" \
-        '{
-            members: $members,
-            excluded_members: $excluded,
-            org_name: (if $org == "" then null else $org end),
-            repo_limit: $limit,
-            strictness_flag: (if $strictness == "" then null else $strictness end),
-            scan_all_override: $scan_all,
-            dryrun: $dryrun
-        }' 2>/dev/null)
-
-    npx tsx "$guild_db" start-conclave "$SIGIL" "$config_json" >/dev/null 2>&1
-}
 
 # Initialize database
 if init_database; then
@@ -544,7 +539,8 @@ fi
 
 # Get list of repositories
 if [[ -n "$REPO_LIST" ]]; then
-    IFS=',' read -A repo_array <<< "$REPO_LIST"
+    # Bash uses -a instead of -A for array read
+    IFS=',' read -ra repo_array <<< "$REPO_LIST"
     repos=$(printf "%s\n" "${repo_array[@]}")
     echo "${BLUE_COLOR}Processing specified repositories...${RESET_COLOR}"
 else
@@ -552,7 +548,7 @@ else
     if [[ -z "$ORG_NAME" ]]; then
         ORG_NAME=$(gh api user -q '.login' 2>/dev/null)
         if [[ -z "$ORG_NAME" ]]; then
-            echo "${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} Could not determine GitHub user. Use -n to specify an org."
+            echo "${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} Could not determine GitHub user. Use -o to specify an org."
             exit 1
         fi
         echo "${BLUE_COLOR}Fetching your repositories (${MAGENTA_COLOR}${ORG_NAME}${RESET_COLOR}) (limit: ${REPO_LIMIT})...${RESET_COLOR}"
@@ -589,37 +585,36 @@ while IFS= read -r repo; do
     ((total_repos++))
 
     echo ""
-    local header_text="Repository: ${repo}"
-    local header_len=${#header_text}
-    local separator_line="${(l:$header_len::═:)}"
+    header_text="Repository: ${repo}"
+    header_len=${#header_text}
+    # Bash equivalent of zsh ${(l:$header_len::═:)}
+    separator_line=$(guild_make_separator "$header_len" "═")
     echo "${BLUE_COLOR}${separator_line}${RESET_COLOR}"
     echo "${BLUE_COLOR}Repository: ${MAGENTA_COLOR}${repo}${RESET_COLOR}"
     echo "${BLUE_COLOR}${separator_line}${RESET_COLOR}"
 
     # Sync repository (clone or pull)
-    local sync_result_file=$(mktemp)
+    sync_result_file=$(mktemp)
 
     # Run sync in background, capture result to temp file
     (sync_repo "$repo" > "$sync_result_file") &
     sync_pid=$!
 
     # Show spinner immediately, then update in loop
-    printf "${NEON_GREEN}${SPINNER_FRAMES[$SPINNER_INDEX]}${RESET_COLOR} Syncing repository..."
     while kill -0 "$sync_pid" 2>/dev/null; do
+        guild_show_spinner "Syncing repository..."
         sleep 0.1
-        SPINNER_INDEX=$(( SPINNER_INDEX % ${#SPINNER_FRAMES[@]} + 1 ))
-        printf "\r${NEON_GREEN}${SPINNER_FRAMES[$SPINNER_INDEX]}${RESET_COLOR} Syncing repository..."
     done
 
     wait "$sync_pid"
-    clear_spinner
+    guild_clear_spinner
     sync_result=$(cat "$sync_result_file")
     rm -f "$sync_result_file"
 
     # Handle sync result
-    local org="${repo%/*}"
-    local name="${repo#*/}"
-    local repo_path="$REPOS_DIR/$org/$name"
+    org="${repo%/*}"
+    name="${repo#*/}"
+    repo_path="$REPOS_DIR/$org/$name"
 
     case "$sync_result" in
         CLONED)
@@ -654,8 +649,8 @@ while IFS= read -r repo; do
     repo_had_issues=false
 
     for tool in "${tools_list[@]}"; do
-        local tool_exe=$(get_tool_executable "$tool")
-        local tool_display_name=$(get_tool_config "$tool" "name")
+        tool_exe=$(get_tool_executable "$tool")
+        tool_display_name=$(get_tool_config "$tool" "name")
         [[ -z "$tool_display_name" ]] && tool_display_name="$tool"
 
         echo ""
@@ -670,21 +665,19 @@ while IFS= read -r repo; do
                 continue
             fi
 
-            local temp_results=$(mktemp)
-            local exit_code=0
+            temp_results=$(mktemp)
+            exit_code=0
 
             # Run tool in background with spinner
             ("$tool_exe" $STRICTNESS_FLAG -g "$SIGIL" -nn "$repo_path" > /dev/null 2>&1; echo $? > "$temp_results") &
-            local tool_pid=$!
+            tool_pid=$!
 
-            printf "${NEON_GREEN}${SPINNER_FRAMES[$SPINNER_INDEX]}${RESET_COLOR} Analyzing repository..."
             while kill -0 "$tool_pid" 2>/dev/null; do
+                guild_show_spinner "Analyzing repository..."
                 sleep 0.1
-                SPINNER_INDEX=$(( SPINNER_INDEX % ${#SPINNER_FRAMES[@]} + 1 ))
-                printf "\r${NEON_GREEN}${SPINNER_FRAMES[$SPINNER_INDEX]}${RESET_COLOR} Analyzing repository..."
             done
             wait "$tool_pid"
-            clear_spinner
+            guild_clear_spinner
 
             exit_code=$(cat "$temp_results")
             rm -f "$temp_results"
@@ -696,7 +689,7 @@ while IFS= read -r repo; do
                 tool_stats["$tool"]=$((tool_stats["$tool"] + 1))
 
                 # Get detailed output (no -g sigil - data already recorded in first call)
-                local issues=$("$tool_exe" $STRICTNESS_FLAG -d --prefix="    " "$repo_path" 2>&1)
+                issues=$("$tool_exe" $STRICTNESS_FLAG -d --prefix="    " "$repo_path" 2>&1)
                 echo "${FAIL_COLOR}${XMARK}${RESET_COLOR} Issues found"
                 if [[ -n "$issues" ]]; then
                     echo "$issues"
@@ -709,27 +702,25 @@ while IFS= read -r repo; do
         fi
 
         # Find files for this tool (with spinner for slow operations)
-        local files=()
-        local files_temp=$(mktemp)
+        files=()
+        files_temp=$(mktemp)
 
         (find_files_for_tool "$tool" "$repo_path" > "$files_temp") &
-        local find_pid=$!
+        find_pid=$!
 
-        printf "${NEON_GREEN}${SPINNER_FRAMES[$SPINNER_INDEX]}${RESET_COLOR} Finding files..."
         while kill -0 "$find_pid" 2>/dev/null; do
+            guild_show_spinner "Finding files..."
             sleep 0.1
-            SPINNER_INDEX=$(( SPINNER_INDEX % ${#SPINNER_FRAMES[@]} + 1 ))
-            printf "\r${NEON_GREEN}${SPINNER_FRAMES[$SPINNER_INDEX]}${RESET_COLOR} Finding files..."
         done
         wait "$find_pid"
-        clear_spinner
+        guild_clear_spinner
 
         while IFS= read -r -d '' file; do
             [[ -n "$file" ]] && files+=("$file")
         done < "$files_temp"
         rm -f "$files_temp"
 
-        local total_files=${#files[@]}
+        total_files=${#files[@]}
         ((total_files_scanned += total_files))
 
         if [[ $total_files -eq 0 ]]; then
@@ -745,9 +736,9 @@ while IFS= read -r repo; do
         fi
 
         # Check files with tool in parallel
-        local problem_files=()
+        problem_files=()
         declare -A file_issues
-        local temp_results=$(mktemp)
+        temp_results=$(mktemp)
 
         # Run parallel checks
         # Use null byte (\0) as record separator to handle multi-line tool output
@@ -765,23 +756,21 @@ while IFS= read -r repo; do
 
         xargs_pid=$!
 
-        # Show spinner immediately, then update in loop
-        printf "${NEON_GREEN}${SPINNER_FRAMES[$SPINNER_INDEX]}${RESET_COLOR} Scanning ${BLUE_COLOR}${total_files}${RESET_COLOR} files..."
+        # Show spinner
         while kill -0 "$xargs_pid" 2>/dev/null; do
+            guild_show_spinner "Scanning ${BLUE_COLOR}${total_files}${RESET_COLOR} files..."
             sleep 0.1
-            SPINNER_INDEX=$(( SPINNER_INDEX % ${#SPINNER_FRAMES[@]} + 1 ))
-            printf "\r${NEON_GREEN}${SPINNER_FRAMES[$SPINNER_INDEX]}${RESET_COLOR} Scanning ${BLUE_COLOR}${total_files}${RESET_COLOR} files..."
         done
 
         wait "$xargs_pid"
-        clear_spinner
+        guild_clear_spinner
 
         # Parse results - use null byte as record delimiter to handle multi-line issues
         while IFS= read -r -d '' record; do
             if [[ "$record" == PROBLEM:* ]]; then
-                local rest="${record#PROBLEM:}"
-                local file="${rest%%|||*}"
-                local issues="${rest#*|||}"
+                rest="${record#PROBLEM:}"
+                file="${rest%%|||*}"
+                issues="${rest#*|||}"
                 problem_files+=("$file")
                 file_issues["$file"]="$issues"
             fi
@@ -789,7 +778,7 @@ while IFS= read -r repo; do
 
         rm -f "$temp_results"
 
-        local problem_count=${#problem_files[@]}
+        problem_count=${#problem_files[@]}
 
         if [[ $problem_count -eq 0 ]]; then
             echo "${SUCCESS_COLOR}${CHECKMARK}${RESET_COLOR} Clean - ${BLUE_COLOR}${total_files}${RESET_COLOR} files checked"
@@ -799,9 +788,9 @@ while IFS= read -r repo; do
             echo "${FAIL_COLOR}${XMARK}${RESET_COLOR} Issues found - ${BLUE_COLOR}${problem_count}${RESET_COLOR} of ${BLUE_COLOR}${total_files}${RESET_COLOR} files"
 
             for pfile in "${problem_files[@]}"; do
-                local display_file="${pfile#$repo_path/}"
+                display_file="${pfile#$repo_path/}"
                 echo "  ${MAGENTA_COLOR}${display_file}${RESET_COLOR}"
-                if [[ -n "${file_issues["$pfile"]}" ]]; then
+                if [[ -n "${file_issues["$pfile"]:-}" ]]; then
                     echo "${file_issues["$pfile"]}"
                 fi
             done
@@ -819,16 +808,16 @@ done <<< "$repos"
 # Generate member testaments (reports) - skip in dryrun mode
 if [[ "$DRYRUN" != true ]]; then
     echo ""
-    echo "${BLUE_COLOR}═════════════════════════════════════════════════════════════════════════════════${RESET_COLOR}"
+    echo "${BLUE_COLOR}$(guild_make_separator 81 "═")${RESET_COLOR}"
     echo "${BLUE_COLOR}                              MEMBERS' TESTAMENTS${RESET_COLOR}"
-    echo "${BLUE_COLOR}═════════════════════════════════════════════════════════════════════════════════${RESET_COLOR}"
+    echo "${BLUE_COLOR}$(guild_make_separator 81 "═")${RESET_COLOR}"
 
     for tool in "${tools_list[@]}"; do
-        local tool_exe=$(get_tool_executable "$tool")
-        local tool_display_name=$(get_tool_config "$tool" "name")
+        tool_exe=$(get_tool_executable "$tool")
+        tool_display_name=$(get_tool_config "$tool" "name")
         [[ -z "$tool_display_name" ]] && tool_display_name="$tool"
 
-        local report_output=$("$tool_exe" $STRICTNESS_FLAG -r "$SIGIL" 2>&1)
+        report_output=$("$tool_exe" $STRICTNESS_FLAG -r "$SIGIL" 2>&1)
 
         if [[ -n "$report_output" ]]; then
             echo ""
@@ -838,26 +827,6 @@ if [[ "$DRYRUN" != true ]]; then
     done
 fi
 
-# End conclave session in database
-end_conclave_session() {
-    local lib_dir="$SCRIPT_DIR/lib"
-    local guild_db="$lib_dir/guild-db.ts"
-
-    [[ ! -f "$guild_db" ]] && return 1
-
-    local stats_json=$(jq -n \
-        --argjson repo_count "$total_repos" \
-        --argjson repos_with_issues "$repos_with_issues" \
-        --argjson total_files "$total_files_scanned" \
-        '{
-            repo_count: $repo_count,
-            repos_with_issues: $repos_with_issues,
-            total_files_scanned: $total_files
-        }' 2>/dev/null)
-
-    npx tsx "$guild_db" end-conclave "$SIGIL" "$stats_json" >/dev/null 2>&1
-}
-
 # End the conclave session (skip in dryrun mode)
 if [[ "$DRYRUN" != true ]]; then
     end_conclave_session
@@ -865,13 +834,13 @@ fi
 
 # Final summary
 echo ""
-echo "${BLUE_COLOR}═════════════════════════════════════════════════════════════════════════════════${RESET_COLOR}"
+echo "${BLUE_COLOR}$(guild_make_separator 81 "═")${RESET_COLOR}"
 if [[ "$DRYRUN" == true ]]; then
     echo "${BLUE_COLOR}                            GUILD TRAINING SUMMARY${RESET_COLOR}"
 else
     echo "${BLUE_COLOR}                                FINAL DECISION${RESET_COLOR}"
 fi
-echo "${BLUE_COLOR}═════════════════════════════════════════════════════════════════════════════════${RESET_COLOR}"
+echo "${BLUE_COLOR}$(guild_make_separator 81 "═")${RESET_COLOR}"
 echo ""
 echo "${YELLOW_COLOR}Total repositories synced:${RESET_COLOR} ${BLUE_COLOR}${total_repos}${RESET_COLOR}"
 if [[ "$DRYRUN" == true ]]; then
@@ -879,9 +848,9 @@ if [[ "$DRYRUN" == true ]]; then
     echo ""
     echo "${CYAN_COLOR}Files per Guild Member:${RESET_COLOR}"
     for tool in "${tools_list[@]}"; do
-        local tool_display_name=$(get_tool_config "$tool" "name")
+        tool_display_name=$(get_tool_config "$tool" "name")
         [[ -z "$tool_display_name" ]] && tool_display_name="$tool"
-        local file_count=${tool_file_counts["$tool"]}
+        file_count=${tool_file_counts["$tool"]}
         echo "  ${MAGENTA_COLOR}${tool_display_name}:${RESET_COLOR} ${BLUE_COLOR}${file_count}${RESET_COLOR} files"
     done
 else
@@ -893,7 +862,8 @@ fi
 if [[ ${#orphan_repos[@]} -gt 0 ]]; then
     echo ""
     echo "${YELLOW_COLOR}${WARNING_SYMBOL} Orphaned repositories (no longer on remote):${RESET_COLOR}"
-    for repo in ${(k)orphan_repos}; do
+    # Bash uses ${!array[@]} for keys instead of zsh ${(k)array}
+    for repo in "${!orphan_repos[@]}"; do
         echo "  ${MAGENTA_COLOR}${repo}${RESET_COLOR}"
     done
 fi
@@ -903,9 +873,9 @@ if [[ "$DRYRUN" != true ]]; then
     echo ""
     echo "${CYAN_COLOR}Indictments Of The Conclave:${RESET_COLOR}"
     for tool in "${tools_list[@]}"; do
-        local tool_display_name=$(get_tool_config "$tool" "name")
+        tool_display_name=$(get_tool_config "$tool" "name")
         [[ -z "$tool_display_name" ]] && tool_display_name="$tool"
-        local count=${tool_stats["$tool"]}
+        count=${tool_stats["$tool"]}
         if [[ $count -eq 0 ]]; then
             echo "  ${SUCCESS_COLOR}${CHECKMARK}${RESET_COLOR} ${tool_display_name}: ${BLUE_COLOR}0${RESET_COLOR} issues"
         else

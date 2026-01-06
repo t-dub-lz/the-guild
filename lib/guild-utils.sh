@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
 #
-# Guild Member Utilities
+# Guild Utilities
 #
-# Common functionality for repository-scope Guild Members.
-# Source this file at the top of your guild member script.
+# Common functionality for Guild scripts (members and orchestrator).
+# Source this file at the top of your guild script.
 #
 # Usage:
-#   source "${SCRIPT_DIR}/../lib/guild-member-utils.sh"
-#   guild_init "tool-name"
+#   source "${SCRIPT_DIR}/../lib/guild-utils.sh"
+#   guild_init "tool-name" "$SCRIPT_DIR"
 #
 # Provides:
-#   - Color definitions (RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, BOLD, NC)
-#   - Guild interface flag variables (SILENT, NO_STDOUT, DETAILS_ONLY, etc.)
-#   - extract_repo_name() function
-#   - guild_parse_base_args() for common argument parsing
-#   - guild_cleanup_setup() for temp directory management
+#   - Color definitions and aliases
+#   - Symbols (CHECKMARK, XMARK, WARNING_SYMBOL, etc.)
+#   - Guild interface flag variables
+#   - guild_init(), guild_parse_base_args(), guild_extract_repo_name()
+#   - guild_load_env() - environment file loading
+#   - guild_strip_jsonc_comments() - JSONC parsing
+#   - Spinner animation functions
+#   - guild_make_separator() - separator line generation
 #
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -29,6 +32,28 @@ MAGENTA='\033[0;35m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# COLOR ALIASES (for consistency across scripts)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+SUCCESS_COLOR="$GREEN"
+FAIL_COLOR="$RED"
+YELLOW_COLOR="$YELLOW"
+BLUE_COLOR="$BLUE"
+MAGENTA_COLOR="$MAGENTA"
+CYAN_COLOR="$CYAN"
+NEON_GREEN=$'\033[0;92m'
+RESET_COLOR="$NC"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SYMBOLS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+CHECKMARK='✓'
+XMARK='✗'
+DOWN_RIGHT_ARROW="╰─>"
+WARNING_SYMBOL='⚠'
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # GUILD INTERFACE VARIABLES
@@ -266,4 +291,98 @@ guild_record_scan() {
     insert_data=$(printf '{"scan":%s,"findings":%s}' "$scan_json" "$findings_json")
 
     npx tsx "$GUILD_DB" insert-with-findings "$GUILD_TOOL_NAME" - <<< "$insert_data" >/dev/null 2>&1 || true
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ENVIRONMENT FILE LOADING
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Load environment variables from .env file
+# Usage: guild_load_env "/path/to/.env"
+# Usage: guild_load_env  # uses $GUILD_SCRIPT_DIR/../.env
+guild_load_env() {
+    local env_file="${1:-${GUILD_SCRIPT_DIR}/../.env}"
+
+    [[ ! -f "$env_file" ]] && return 0
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        # Skip empty lines and comments
+        [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+
+        # Remove leading/trailing whitespace
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+
+        # Skip if not a valid KEY=value format
+        [[ "$line" != *=* ]] && continue
+
+        # Extract key and value
+        local key="${line%%=*}"
+        local value="${line#*=}"
+
+        # Remove surrounding quotes from value if present
+        if [[ "$value" =~ ^\"(.*)\"$ ]]; then
+            value="${BASH_REMATCH[1]}"
+        elif [[ "$value" =~ ^\'(.*)\'$ ]]; then
+            value="${BASH_REMATCH[1]}"
+        fi
+
+        # Export the variable
+        export "$key=$value"
+    done < "$env_file"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# JSONC PARSING
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Strip JSONC comments from input
+# Removes // comments on their own lines and /* */ block comments
+# Usage: json=$(guild_strip_jsonc_comments "$(cat config.jsonc)")
+guild_strip_jsonc_comments() {
+    local input="$1"
+    echo "$input" | sed -e '/^[[:space:]]*\/\//d' -e 's|/\*.*\*/||g'
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SPINNER ANIMATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+GUILD_SPINNER_FRAMES=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+GUILD_SPINNER_INDEX=0
+
+# Clear spinner line
+guild_clear_spinner() {
+    printf "\r\033[K"
+}
+
+# Advance spinner to next frame
+guild_advance_spinner() {
+    GUILD_SPINNER_INDEX=$(( (GUILD_SPINNER_INDEX + 1) % ${#GUILD_SPINNER_FRAMES[@]} ))
+}
+
+# Get current spinner character
+guild_get_spinner() {
+    echo "${GUILD_SPINNER_FRAMES[$GUILD_SPINNER_INDEX]}"
+}
+
+# Show spinner with message (call in a loop)
+# Usage: guild_show_spinner "Loading..."
+guild_show_spinner() {
+    local message="$1"
+    printf "\r${NEON_GREEN}%s${RESET_COLOR} %s" "${GUILD_SPINNER_FRAMES[$GUILD_SPINNER_INDEX]}" "$message"
+    guild_advance_spinner
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DISPLAY UTILITIES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Generate separator line of given length
+# Usage: separator=$(guild_make_separator 40 "═")
+# Usage: separator=$(guild_make_separator 40)  # defaults to "═"
+guild_make_separator() {
+    local len="$1"
+    local char="${2:-═}"
+    printf '%*s' "$len" '' | tr ' ' "$char"
 }

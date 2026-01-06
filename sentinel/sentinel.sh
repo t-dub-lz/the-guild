@@ -25,8 +25,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Source guild member utilities
-source "${SCRIPT_DIR}/../lib/guild-member-utils.sh"
+# Source guild utilities
+source "${SCRIPT_DIR}/../lib/guild-utils.sh"
 
 # Initialize as guild member
 guild_init "sentinel" "$SCRIPT_DIR"
@@ -64,16 +64,30 @@ check_snyk_auth() {
     exit 2
 }
 
-# Run SCA scan (snyk test)
+# Run SCA scan (snyk test) with optional spinner
 # Returns: exit_code|critical|high|medium|low|findings_json|error_msg
 run_sca_scan() {
     local repo_path="$1"
     local output_file="$GUILD_TEMP_DIR/sca_output.json"
+    local exit_code_file="$GUILD_TEMP_DIR/sca_exit_code"
     local exit_code=0
 
-    # Run snyk test with JSON output
+    # Run snyk test in background with JSON output
     # Note: snyk returns 1 if vulnerabilities found (not an error!)
-    snyk test --json --all-projects "$repo_path" > "$output_file" 2>&1 || exit_code=$?
+    (snyk test --json --all-projects "$repo_path" > "$output_file" 2>&1; echo $? > "$exit_code_file") &
+    local scan_pid=$!
+
+    # Show spinner while scan is running (unless silent)
+    if [[ "$GUILD_SILENT" != true && "$GUILD_NO_STDOUT" != true ]]; then
+        while kill -0 "$scan_pid" 2>/dev/null; do
+            guild_show_spinner "Running SCA scan..."
+            sleep 0.1
+        done
+        guild_clear_spinner
+    fi
+
+    wait "$scan_pid" 2>/dev/null || true
+    exit_code=$(cat "$exit_code_file" 2>/dev/null || echo "0")
 
     # Handle exit codes
     # 0 = no vulnerabilities
@@ -150,15 +164,29 @@ parse_sca_results() {
     echo "${exit_code}|${critical}|${high}|${medium}|${low}|${findings}|"
 }
 
-# Run SAST scan (snyk code test)
+# Run SAST scan (snyk code test) with optional spinner
 # Returns: exit_code|critical|high|medium|low|findings_json|error_msg
 run_sast_scan() {
     local repo_path="$1"
     local output_file="$GUILD_TEMP_DIR/sast_output.json"
+    local exit_code_file="$GUILD_TEMP_DIR/sast_exit_code"
     local exit_code=0
 
-    # Run snyk code test with JSON output
-    snyk code test --json "$repo_path" > "$output_file" 2>&1 || exit_code=$?
+    # Run snyk code test in background with JSON output
+    (snyk code test --json "$repo_path" > "$output_file" 2>&1; echo $? > "$exit_code_file") &
+    local scan_pid=$!
+
+    # Show spinner while scan is running (unless silent)
+    if [[ "$GUILD_SILENT" != true && "$GUILD_NO_STDOUT" != true ]]; then
+        while kill -0 "$scan_pid" 2>/dev/null; do
+            guild_show_spinner "Running SAST scan..."
+            sleep 0.1
+        done
+        guild_clear_spinner
+    fi
+
+    wait "$scan_pid" 2>/dev/null || true
+    exit_code=$(cat "$exit_code_file" 2>/dev/null || echo "0")
 
     # Handle exit codes (same as SCA)
     if [[ $exit_code -eq 2 ]]; then
@@ -351,8 +379,8 @@ generate_report() {
     critical_repos=$(echo "$scans_json" | jq -r '[.[] | select(.sca_critical > 0 or .sast_critical > 0)] | unique_by(.repo) | .[].repo' 2>/dev/null || true)
 
     if [[ -n "$critical_repos" ]]; then
-        printf "\n${RED}${BOLD}Repositories with Critical Issues:${NC}\n"
-        printf "────────────────────────────────────────────────────\n"
+        printf "\n${RED}${BOLD}${XMARK} Repositories with Critical Issues:${NC}\n"
+        printf "%s\n" "$(guild_make_separator 52 "─")"
         for repo in $critical_repos; do
             local repo_criticals
             repo_criticals=$(echo "$scans_json" | jq -r --arg r "$repo" '[.[] | select(.repo == $r)] | .[0] | "\(.sca_critical + .sast_critical) critical"' 2>/dev/null || echo "? critical")
@@ -361,7 +389,7 @@ generate_report() {
     fi
 
     if [[ "$total_vulns" -eq 0 ]]; then
-        printf "\n${GREEN}All repositories clean - no vulnerabilities found${NC}\n"
+        printf "\n${GREEN}${CHECKMARK} All repositories clean - no vulnerabilities found${NC}\n"
     fi
 }
 

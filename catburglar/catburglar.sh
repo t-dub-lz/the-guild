@@ -24,8 +24,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Source guild member utilities
-source "${SCRIPT_DIR}/../lib/guild-member-utils.sh"
+# Source guild utilities
+source "${SCRIPT_DIR}/../lib/guild-utils.sh"
 
 # Initialize as guild member
 guild_init "catburglar" "$SCRIPT_DIR"
@@ -205,10 +205,10 @@ generate_report() {
     printf "${BOLD}╚═══════════════════════════════════════════════════╝${NC}\n"
 
     if [[ "$total_snyk" -eq 0 ]]; then
-        printf "\n${GREEN}All repositories clean - no Snyk-blocked PRs${NC}\n"
+        printf "\n${GREEN}${CHECKMARK} All repositories clean - no Snyk-blocked PRs${NC}\n"
     else
-        printf "\n${RED}${BOLD}Snyk-Blocked PRs by Repository:${NC}\n"
-        printf "────────────────────────────────────────────────────\n"
+        printf "\n${RED}${BOLD}${XMARK} Snyk-Blocked PRs by Repository:${NC}\n"
+        printf "%s\n" "$(guild_make_separator 52 "─")"
 
         # Get repos with snyk issues
         local repos_with_issues
