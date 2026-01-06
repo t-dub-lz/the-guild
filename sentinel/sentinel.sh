@@ -19,66 +19,21 @@
 
 set -euo pipefail
 
-# Tool identification
-TOOL_NAME="sentinel"
+# ═══════════════════════════════════════════════════════════════════════════════
+# GUILD MEMBER SETUP
+# ═══════════════════════════════════════════════════════════════════════════════
 
-# Guild DB path
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GUILD_DB="${SCRIPT_DIR}/../lib/guild-db.ts"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-BLUE='\033[0;34m'
-MAGENTA='\033[0;35m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m'
+# Source guild member utilities
+source "${SCRIPT_DIR}/../lib/guild-member-utils.sh"
 
-# Guild interface flags
-SILENT=false
-NO_STDOUT=false
-DETAILS_ONLY=false
-PREFIX=""
-SIGIL=""
-REPORT_MODE=false
-REPO_PATH=""
-STRICTNESS_FLAG=""
+# Initialize as guild member
+guild_init "sentinel" "$SCRIPT_DIR"
 
-# Temp directory for this invocation
-TEMP_DIR=""
-
-# Cleanup function
-cleanup() {
-    if [[ -n "$TEMP_DIR" && -d "$TEMP_DIR" ]]; then
-        rm -rf "$TEMP_DIR"
-    fi
-}
-trap cleanup EXIT
-
-# Check dependencies - CALLED EARLY for fast fail
-check_dependencies() {
-    local missing=()
-
-    if ! command -v snyk &> /dev/null; then
-        missing+=("snyk")
-    fi
-
-    if ! command -v jq &> /dev/null; then
-        missing+=("jq")
-    fi
-
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        if [[ "$SILENT" != true ]]; then
-            printf "${RED}Error: Missing dependencies: %s${NC}\n" "${missing[*]}" >&2
-            if [[ " ${missing[*]} " =~ " snyk " ]]; then
-                printf "Install Snyk CLI: npm install -g snyk\n" >&2
-            fi
-        fi
-        exit 2
-    fi
-}
+# ═══════════════════════════════════════════════════════════════════════════════
+# SENTINEL-SPECIFIC FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
 
 # Check Snyk authentication using public CLI interface only
 check_snyk_auth() {
@@ -95,7 +50,6 @@ check_snyk_auth() {
     fi
 
     # Check for OAuth authentication via snyk config CLI
-    # (INTERNAL_OAUTH_TOKEN_STORAGE is accessible via the public CLI)
     local oauth_token
     oauth_token=$(snyk config get INTERNAL_OAUTH_TOKEN_STORAGE 2>/dev/null || echo "")
     if [[ -n "$oauth_token" ]]; then
@@ -103,40 +57,18 @@ check_snyk_auth() {
     fi
 
     # No authentication found
-    if [[ "$SILENT" != true ]]; then
-        printf "${RED}Error: Snyk CLI not authenticated${NC}\n" >&2
+    guild_error "Snyk CLI not authenticated"
+    if [[ "$GUILD_SILENT" != true ]]; then
         printf "Run 'snyk auth' to authenticate with Snyk\n" >&2
     fi
     exit 2
-}
-
-# Extract org/repo name from repository path
-extract_repo_name() {
-    local path="$1"
-
-    # Try to extract from .repos path structure
-    if [[ "$path" =~ \.repos/([^/]+/[^/]+)/?$ ]]; then
-        echo "${BASH_REMATCH[1]}"
-    elif [[ "$path" =~ \.repos/([^/]+/[^/]+)/ ]]; then
-        echo "${BASH_REMATCH[1]}"
-    elif [[ "$path" =~ ^([^/]+/[^/]+)$ ]]; then
-        # Direct org/repo format
-        echo "$path"
-    else
-        # Last resort: take last two path components
-        local normalized="${path%/}"
-        local repo="${normalized##*/}"
-        local parent="${normalized%/*}"
-        local org="${parent##*/}"
-        echo "$org/$repo"
-    fi
 }
 
 # Run SCA scan (snyk test)
 # Returns: exit_code|critical|high|medium|low|findings_json|error_msg
 run_sca_scan() {
     local repo_path="$1"
-    local output_file="$TEMP_DIR/sca_output.json"
+    local output_file="$GUILD_TEMP_DIR/sca_output.json"
     local exit_code=0
 
     # Run snyk test with JSON output
@@ -222,7 +154,7 @@ parse_sca_results() {
 # Returns: exit_code|critical|high|medium|low|findings_json|error_msg
 run_sast_scan() {
     local repo_path="$1"
-    local output_file="$TEMP_DIR/sast_output.json"
+    local output_file="$GUILD_TEMP_DIR/sast_output.json"
     local exit_code=0
 
     # Run snyk code test with JSON output
@@ -255,9 +187,7 @@ parse_sast_results() {
     local critical=0 high=0 medium=0 low=0
     local findings="[]"
 
-    # Count by severity (Snyk Code uses 1-3 scale, map to severity names)
-    # Level 1 = low, 2 = medium, 3 = high
-    # Note: Snyk Code doesn't typically have "critical" but we handle it just in case
+    # Count by severity
     critical=$(jq '[.runs[]?.results[]? | select(.level == "error" and .properties.priorityScore >= 900)] | length' "$json_file" 2>/dev/null || echo 0)
     high=$(jq '[.runs[]?.results[]? | select(.level == "error" or .level == "warning")] | length' "$json_file" 2>/dev/null || echo 0)
     medium=$(jq '[.runs[]?.results[]? | select(.level == "note")] | length' "$json_file" 2>/dev/null || echo 0)
@@ -278,7 +208,6 @@ parse_sast_results() {
 }
 
 # Analyze a single repository
-# Returns structured results for database recording
 analyze_single_repo() {
     local repo_path="$1"
     local scan_type="sca"
@@ -302,7 +231,7 @@ analyze_single_repo() {
     fi
 
     # Run SAST if strict mode is enabled
-    if [[ "$STRICTNESS_FLAG" == "-s" || "$STRICTNESS_FLAG" == "-S" ]]; then
+    if [[ "$GUILD_STRICTNESS" == "-s" || "$GUILD_STRICTNESS" == "-S" ]]; then
         scan_type="both"
         local sast_result
         sast_result=$(run_sast_scan "$repo_path")
@@ -322,7 +251,6 @@ analyze_single_repo() {
     all_findings=$(echo "$sca_findings $sast_findings" | jq -sc 'add // []' 2>/dev/null || echo "[]")
 
     # Output structured result
-    # Format: scan_type|total|sca_c|sca_h|sca_m|sca_l|sast_c|sast_h|sast_m|sast_l|sca_error|sast_error|findings_json|has_vulns
     printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n" \
         "$scan_type" "$total_vulns" \
         "$sca_critical" "$sca_high" "$sca_medium" "$sca_low" \
@@ -336,7 +264,6 @@ output_details() {
     local findings_json="$1"
     local prefix="$2"
 
-    # Group by severity and output
     local count
     count=$(echo "$findings_json" | jq 'length' 2>/dev/null || echo "0")
 
@@ -380,7 +307,7 @@ generate_report() {
     findings_json=$(npx tsx "$GUILD_DB" query-findings sentinel "$sigil" 2>/dev/null || echo "[]")
 
     # Aggregate statistics
-    local total_repos total_vulns repos_with_vulns
+    local total_repos repos_with_vulns total_vulns
     local sca_critical sca_high sca_medium sca_low
     local sast_critical sast_high sast_medium sast_low
 
@@ -438,101 +365,45 @@ generate_report() {
     fi
 }
 
-# Parse command line arguments
-parse_args() {
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            -nn)
-                SILENT=true
-                NO_STDOUT=true
-                shift
-                ;;
-            -n)
-                NO_STDOUT=true
-                shift
-                ;;
-            -d)
-                DETAILS_ONLY=true
-                shift
-                ;;
-            --prefix=*)
-                PREFIX="${1#--prefix=}"
-                shift
-                ;;
-            --prefix)
-                PREFIX="$2"
-                shift 2
-                ;;
-            -g)
-                SIGIL="$2"
-                shift 2
-                ;;
-            -r)
-                SIGIL="$2"
-                REPORT_MODE=true
-                shift 2
-                ;;
-            -s)
-                STRICTNESS_FLAG="-s"
-                shift
-                ;;
-            -S)
-                STRICTNESS_FLAG="-S"
-                shift
-                ;;
-            -*)
-                # Unknown flag - ignore
-                shift
-                ;;
-            *)
-                REPO_PATH="$1"
-                shift
-                ;;
-        esac
-    done
-}
+# ═══════════════════════════════════════════════════════════════════════════════
+# MAIN EXECUTION
+# ═══════════════════════════════════════════════════════════════════════════════
 
-# Main execution
 main() {
-    parse_args "$@"
+    # Parse arguments using guild utilities
+    guild_parse_base_args "$@"
 
     # Report mode - generate aggregated report and exit
-    if [[ "$REPORT_MODE" == true && -n "$SIGIL" ]]; then
-        generate_report "$SIGIL"
+    if [[ "$GUILD_REPORT_MODE" == true && -n "$GUILD_SIGIL" ]]; then
+        generate_report "$GUILD_SIGIL"
         exit 0
     fi
 
     # Normal mode - need a repo path
-    if [[ -z "$REPO_PATH" ]]; then
-        if [[ "$SILENT" != true ]]; then
-            printf "${RED}Error: No repository path provided${NC}\n" >&2
-        fi
-        exit 2
+    if [[ -z "$GUILD_REPO_PATH" ]]; then
+        guild_exit_error "No repository path provided"
     fi
 
     # Check dependencies EARLY for fast fail
-    check_dependencies
+    guild_check_commands "snyk" "jq"
 
-    # Check authentication
+    # Check Snyk authentication
     check_snyk_auth
 
     # Create temp directory for this analysis
-    TEMP_DIR=$(mktemp -d)
+    guild_create_temp_dir
 
     # Extract repo name from path
     local repo_name
-    repo_name=$(extract_repo_name "$REPO_PATH")
+    repo_name=$(guild_extract_repo_name "$GUILD_REPO_PATH")
 
     if [[ -z "$repo_name" || "$repo_name" == "/" ]]; then
-        if [[ "$SILENT" != true ]]; then
-            printf "${RED}Error: Could not extract repo name from path: %s${NC}\n" "$REPO_PATH" >&2
-        fi
-        exit 2
+        guild_exit_error "Could not extract repo name from path: $GUILD_REPO_PATH"
     fi
 
     # Analyze the repository
     local result
-    result=$(analyze_single_repo "$REPO_PATH")
+    result=$(analyze_single_repo "$GUILD_REPO_PATH")
 
     # Parse result
     local scan_type total_vulns sca_critical sca_high sca_medium sca_low
@@ -545,21 +416,25 @@ main() {
         sca_error sast_error \
         findings_json has_vulns <<< "$result"
 
-    # Record to guild database
-    if [[ -n "$SIGIL" && -f "$GUILD_DB" ]]; then
-        local insert_data
-        insert_data=$(cat <<EOF
-{"scan":{"sigil":"${SIGIL}","repo":"${repo_name}","scan_type":"${scan_type}","sca_critical":${sca_critical:-0},"sca_high":${sca_high:-0},"sca_medium":${sca_medium:-0},"sca_low":${sca_low:-0},"sast_critical":${sast_critical:-0},"sast_high":${sast_high:-0},"sast_medium":${sast_medium:-0},"sast_low":${sast_low:-0},"total_vulns":${total_vulns:-0},"sca_error":${sca_error:+\"$sca_error\"}${sca_error:-null},"sast_error":${sast_error:+\"$sast_error\"}${sast_error:-null}},"findings":${findings_json:-[]}}
-EOF
-)
-        npx tsx "$GUILD_DB" insert-with-findings sentinel - <<< "$insert_data" >/dev/null 2>&1 || true
+    # Record to guild database using utility
+    if [[ -n "$GUILD_SIGIL" ]]; then
+        local scan_json
+        scan_json=$(printf '{"sigil":"%s","repo":"%s","scan_type":"%s","sca_critical":%d,"sca_high":%d,"sca_medium":%d,"sca_low":%d,"sast_critical":%d,"sast_high":%d,"sast_medium":%d,"sast_low":%d,"total_vulns":%d,"sca_error":%s,"sast_error":%s}' \
+            "$GUILD_SIGIL" "$repo_name" "$scan_type" \
+            "${sca_critical:-0}" "${sca_high:-0}" "${sca_medium:-0}" "${sca_low:-0}" \
+            "${sast_critical:-0}" "${sast_high:-0}" "${sast_medium:-0}" "${sast_low:-0}" \
+            "${total_vulns:-0}" \
+            "${sca_error:+\"$sca_error\"}${sca_error:-null}" \
+            "${sast_error:+\"$sast_error\"}${sast_error:-null}")
+
+        guild_record_scan "$scan_json" "${findings_json:-[]}"
     fi
 
     # Output based on mode
     if [[ "$has_vulns" == "true" ]]; then
         # Has vulnerabilities
-        if [[ "$DETAILS_ONLY" == true && "$NO_STDOUT" != true ]]; then
-            output_details "$findings_json" "$PREFIX"
+        if [[ "$GUILD_DETAILS_ONLY" == true && "$GUILD_NO_STDOUT" != true ]]; then
+            output_details "$findings_json" "$GUILD_PREFIX"
         fi
         exit 1
     fi

@@ -18,90 +18,27 @@
 
 set -euo pipefail
 
-# Tool identification
-TOOL_NAME="catburglar"
+# ═══════════════════════════════════════════════════════════════════════════════
+# GUILD MEMBER SETUP
+# ═══════════════════════════════════════════════════════════════════════════════
 
-# Guild DB path
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GUILD_DB="${SCRIPT_DIR}/../lib/guild-db.ts"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-BLUE='\033[0;34m'
-MAGENTA='\033[0;35m'
-BOLD='\033[1m'
-NC='\033[0m'
+# Source guild member utilities
+source "${SCRIPT_DIR}/../lib/guild-member-utils.sh"
 
-# Guild interface flags
-SILENT=false
-NO_STDOUT=false
-DETAILS_ONLY=false
-PREFIX=""
-SIGIL=""
-REPORT_MODE=false
-REPO_PATH=""
+# Initialize as guild member
+guild_init "catburglar" "$SCRIPT_DIR"
 
-# Temp directory for this invocation
-TEMP_DIR=""
+# ═══════════════════════════════════════════════════════════════════════════════
+# CATBURGLAR-SPECIFIC FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
 
-# Cleanup function
-cleanup() {
-    if [[ -n "$TEMP_DIR" && -d "$TEMP_DIR" ]]; then
-        rm -rf "$TEMP_DIR"
-    fi
-}
-trap cleanup EXIT
-
-# Check dependencies
-check_dependencies() {
-    local missing=()
-
-    if ! command -v gh &> /dev/null; then
-        missing+=("gh")
-    fi
-
-    if ! command -v jq &> /dev/null; then
-        missing+=("jq")
-    fi
-
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        if [[ "$SILENT" != true ]]; then
-            printf "${RED}Error: Missing dependencies: %s${NC}\n" "${missing[*]}" >&2
-        fi
-        exit 2
-    fi
-
-    # Check gh authentication
+# Check GitHub CLI authentication
+check_gh_auth() {
     if ! gh auth status &> /dev/null; then
-        if [[ "$SILENT" != true ]]; then
-            printf "${RED}Error: GitHub CLI not authenticated${NC}\n" >&2
-        fi
+        guild_error "GitHub CLI not authenticated"
         exit 2
-    fi
-}
-
-# Extract org/repo name from repository path
-# Path format: /path/to/.repos/org/reponame or just org/reponame
-extract_repo_name() {
-    local path="$1"
-
-    # Try to extract from .repos path structure
-    if [[ "$path" =~ \.repos/([^/]+/[^/]+)/?$ ]]; then
-        echo "${BASH_REMATCH[1]}"
-    elif [[ "$path" =~ \.repos/([^/]+/[^/]+)/ ]]; then
-        echo "${BASH_REMATCH[1]}"
-    elif [[ "$path" =~ ^([^/]+/[^/]+)$ ]]; then
-        # Direct org/repo format
-        echo "$path"
-    else
-        # Last resort: take last two path components
-        local normalized="${path%/}"
-        local repo="${normalized##*/}"
-        local parent="${normalized%/*}"
-        local org="${parent##*/}"
-        echo "$org/$repo"
     fi
 }
 
@@ -155,7 +92,7 @@ query($endCursor: String) {
 # Returns: total_prs|failing_prs|snyk_blocked_prs|snyk_details_json
 analyze_single_repo() {
     local repo="$1"
-    local data_file="$TEMP_DIR/pr_data.json"
+    local data_file="$GUILD_TEMP_DIR/pr_data.json"
 
     # Fetch PR data
     if ! fetch_pr_data "$repo" "$data_file" 2>/dev/null; then
@@ -216,9 +153,8 @@ analyze_single_repo() {
 
 # Output detailed information about Snyk-blocked PRs
 output_details() {
-    local repo="$1"
-    local snyk_details="$2"
-    local prefix="$3"
+    local snyk_details="$1"
+    local prefix="$2"
 
     local count
     count=$(echo "$snyk_details" | jq 'length' 2>/dev/null || echo "0")
@@ -289,89 +225,40 @@ generate_report() {
     fi
 }
 
-# Parse command line arguments
-parse_args() {
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            -nn)
-                SILENT=true
-                NO_STDOUT=true
-                shift
-                ;;
-            -n)
-                NO_STDOUT=true
-                shift
-                ;;
-            -d)
-                DETAILS_ONLY=true
-                shift
-                ;;
-            --prefix=*)
-                PREFIX="${1#--prefix=}"
-                shift
-                ;;
-            --prefix)
-                PREFIX="$2"
-                shift 2
-                ;;
-            -g)
-                SIGIL="$2"
-                shift 2
-                ;;
-            -r)
-                SIGIL="$2"
-                REPORT_MODE=true
-                shift 2
-                ;;
-            -s|-S)
-                # Strictness flags - ignored for this tool
-                shift
-                ;;
-            -*)
-                # Unknown flag - ignore
-                shift
-                ;;
-            *)
-                REPO_PATH="$1"
-                shift
-                ;;
-        esac
-    done
-}
+# ═══════════════════════════════════════════════════════════════════════════════
+# MAIN EXECUTION
+# ═══════════════════════════════════════════════════════════════════════════════
 
-# Main execution
 main() {
-    parse_args "$@"
+    # Parse arguments using guild utilities
+    guild_parse_base_args "$@"
 
     # Report mode - generate aggregated report and exit
-    if [[ "$REPORT_MODE" == true && -n "$SIGIL" ]]; then
-        generate_report "$SIGIL"
+    if [[ "$GUILD_REPORT_MODE" == true && -n "$GUILD_SIGIL" ]]; then
+        generate_report "$GUILD_SIGIL"
         exit 0
     fi
 
     # Normal mode - need a repo path
-    if [[ -z "$REPO_PATH" ]]; then
-        if [[ "$SILENT" != true ]]; then
-            printf "${RED}Error: No repository path provided${NC}\n" >&2
-        fi
-        exit 2
+    if [[ -z "$GUILD_REPO_PATH" ]]; then
+        guild_exit_error "No repository path provided"
     fi
 
-    # Check dependencies
-    check_dependencies
+    # Check dependencies EARLY for fast fail
+    guild_check_commands "gh" "jq"
+
+    # Check GitHub CLI authentication
+    check_gh_auth
 
     # Create temp directory for this analysis
-    TEMP_DIR=$(mktemp -d)
+    guild_create_temp_dir
 
     # Extract repo name from path
     local repo_name
-    repo_name=$(extract_repo_name "$REPO_PATH")
+    repo_name=$(guild_extract_repo_name "$GUILD_REPO_PATH")
 
     if [[ -z "$repo_name" || "$repo_name" == "/" ]]; then
-        if [[ "$SILENT" != true ]]; then
-            printf "${RED}Error: Could not extract repo name from path: %s${NC}\n" "$REPO_PATH" >&2
-        fi
-        exit 2
+        guild_exit_error "Could not extract repo name from path: $GUILD_REPO_PATH"
     fi
 
     # Analyze the repository
@@ -383,24 +270,23 @@ main() {
     IFS='|' read -r total_prs failing_prs snyk_blocked snyk_details <<< "$result"
 
     # Record to guild database
-    if [[ -n "$SIGIL" && -f "$GUILD_DB" ]]; then
+    if [[ -n "$GUILD_SIGIL" ]]; then
         # Transform snyk_details to findings format (use -c for compact output)
         local findings_json
         findings_json=$(echo "$snyk_details" | jq -c '[.[] | {pr_number: .pr_number, pr_title: .title, pr_url: .url, check_name: .check, check_state: .state}]' 2>/dev/null || echo "[]")
 
-        local insert_data
-        insert_data=$(cat <<EOF
-{"scan":{"sigil":"${SIGIL}","repo":"${repo_name}","total_prs":${total_prs:-0},"failing_prs":${failing_prs:-0},"snyk_blocked":${snyk_blocked:-0}},"findings":${findings_json}}
-EOF
-)
-        npx tsx "$GUILD_DB" insert-with-findings catburglar - <<< "$insert_data" >/dev/null 2>&1 || true
+        local scan_json
+        scan_json=$(printf '{"sigil":"%s","repo":"%s","total_prs":%d,"failing_prs":%d,"snyk_blocked":%d}' \
+            "$GUILD_SIGIL" "$repo_name" "${total_prs:-0}" "${failing_prs:-0}" "${snyk_blocked:-0}")
+
+        guild_record_scan "$scan_json" "$findings_json"
     fi
 
     # Output based on mode
     if [[ "$snyk_blocked" -gt 0 ]]; then
         # Has Snyk-blocked PRs
-        if [[ "$DETAILS_ONLY" == true && "$NO_STDOUT" != true ]]; then
-            output_details "$repo_name" "$snyk_details" "$PREFIX"
+        if [[ "$GUILD_DETAILS_ONLY" == true && "$GUILD_NO_STDOUT" != true ]]; then
+            output_details "$snyk_details" "$GUILD_PREFIX"
         fi
         exit 1
     fi
