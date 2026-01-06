@@ -80,30 +80,25 @@ check_dependencies() {
     fi
 }
 
-# Check Snyk authentication
+# Check Snyk authentication using public CLI interface only
 check_snyk_auth() {
-    # Check if Snyk config file exists with credentials
-    local config_file="${HOME}/.config/configstore/snyk.json"
-
-    if [[ -f "$config_file" ]]; then
-        # Config exists - check for OAuth token or API token
-        # OAuth uses INTERNAL_OAUTH_TOKEN_STORAGE, API uses api key
-        local has_token
-        has_token=$(jq -e '.INTERNAL_OAUTH_TOKEN_STORAGE // .api // empty' "$config_file" 2>/dev/null || echo "")
-        if [[ -n "$has_token" ]]; then
-            return 0
-        fi
-    fi
-
-    # Fallback: check if API token is set via snyk config or environment
-    local token
-    token=$(snyk config get api 2>/dev/null || echo "")
-    if [[ -n "$token" ]]; then
+    # Check SNYK_TOKEN environment variable first (CI/CD scenarios)
+    if [[ -n "${SNYK_TOKEN:-}" ]]; then
         return 0
     fi
 
-    # Check SNYK_TOKEN environment variable
-    if [[ -n "${SNYK_TOKEN:-}" ]]; then
+    # Check for API token via snyk config CLI
+    local api_token
+    api_token=$(snyk config get api 2>/dev/null || echo "")
+    if [[ -n "$api_token" ]]; then
+        return 0
+    fi
+
+    # Check for OAuth authentication via snyk config CLI
+    # (INTERNAL_OAUTH_TOKEN_STORAGE is accessible via the public CLI)
+    local oauth_token
+    oauth_token=$(snyk config get INTERNAL_OAUTH_TOKEN_STORAGE 2>/dev/null || echo "")
+    if [[ -n "$oauth_token" ]]; then
         return 0
     fi
 
