@@ -1,0 +1,47 @@
+{
+  "name": "Sentinel",
+  "description": "Runs Snyk vulnerability scans (SCA and optionally SAST) on repositories",
+  "patterns": [],
+  "scanAllText": false,
+  // Operates once per repository via Snyk CLI, not per file
+  "repositoryScope": true,
+
+  "dbSchema": {
+    "scans": {
+      "tableName": "sentinel_scans",
+      "columns": [
+        { "name": "repo", "type": "TEXT", "required": true },
+        { "name": "scan_type", "type": "TEXT", "required": true },
+        { "name": "sca_critical", "type": "INTEGER", "required": false, "default": 0 },
+        { "name": "sca_high", "type": "INTEGER", "required": false, "default": 0 },
+        { "name": "sca_medium", "type": "INTEGER", "required": false, "default": 0 },
+        { "name": "sca_low", "type": "INTEGER", "required": false, "default": 0 },
+        { "name": "sast_critical", "type": "INTEGER", "required": false, "default": 0 },
+        { "name": "sast_high", "type": "INTEGER", "required": false, "default": 0 },
+        { "name": "sast_medium", "type": "INTEGER", "required": false, "default": 0 },
+        { "name": "sast_low", "type": "INTEGER", "required": false, "default": 0 },
+        { "name": "total_vulns", "type": "INTEGER", "required": true, "default": 0 },
+        { "name": "sca_error", "type": "TEXT", "required": false },
+        { "name": "sast_error", "type": "TEXT", "required": false }
+      ],
+      "indexes": ["repo", "total_vulns"]
+    },
+    "findings": {
+      "tableName": "sentinel_findings",
+      "columns": [
+        { "name": "vuln_id", "type": "TEXT", "required": true },
+        { "name": "source", "type": "TEXT", "required": true },
+        { "name": "severity", "type": "TEXT", "required": true },
+        { "name": "title", "type": "TEXT", "required": true },
+        { "name": "package_name", "type": "TEXT", "required": false },
+        { "name": "package_version", "type": "TEXT", "required": false },
+        { "name": "file_path", "type": "TEXT", "required": false },
+        { "name": "line_number", "type": "INTEGER", "required": false },
+        { "name": "cwe", "type": "TEXT", "required": false },
+        { "name": "cvss_score", "type": "REAL", "required": false },
+        { "name": "is_upgradable", "type": "INTEGER", "required": false, "default": 0 }
+      ],
+      "indexes": ["vuln_id", "source", "severity"]
+    }
+  }
+}
