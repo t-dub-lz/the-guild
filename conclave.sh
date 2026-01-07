@@ -71,10 +71,14 @@ show_help() {
     echo "  -x <members>    Exclude members by folder name (comma-separated)"
     echo "  -a              Scan all text files (overrides per-tool config)"
     echo "  -n              Guild training - count files without running analysis"
-    echo "  -s              Strict mode"
-    echo "  -S              Super strict mode"
+    echo "  -s              Strict mode (2x member timeout)"
+    echo "  -S              Super strict mode (3x member timeout)"
     echo "  -d              Enable debug output (to stderr)"
     echo "  -h, --help      Show this help message"
+    echo ""
+    echo "Environment Variables:"
+    echo "  MEMBER_TIMEOUT  Base member tool timeout in seconds (default: 300)"
+    echo "                  Scaled by strictness: -s = 2x, -S = 3x"
     echo ""
     echo "Arguments:"
     echo "  [repos]         Optional comma-separated list of repos (e.g., org/repo1,org/repo2)"
@@ -611,6 +615,20 @@ for tool in "${tools_list[@]}"; do
 done
 
 # Process each repository
+# Member tool timeout based on strictness level
+# Base timeout is 5 minutes (300s), scaled by strictness:
+# -s (strict) = 2x base timeout
+# -S (super strict) = 3x base timeout
+BASE_TIMEOUT=${MEMBER_TIMEOUT:-300}  # Default 5 minutes, or user-provided value
+if [[ "$STRICTNESS_FLAG" == "-S" ]]; then
+    MEMBER_TIMEOUT=$((BASE_TIMEOUT * 3))   # 3x for super strict
+elif [[ "$STRICTNESS_FLAG" == "-s" ]]; then
+    MEMBER_TIMEOUT=$((BASE_TIMEOUT * 2))   # 2x for strict
+else
+    MEMBER_TIMEOUT=$BASE_TIMEOUT           # 1x for normal
+fi
+debug "Member timeout: ${MEMBER_TIMEOUT}s (base: ${BASE_TIMEOUT}s, strictness: ${STRICTNESS_FLAG:-none})"
+
 debug "Starting repository processing loop"
 while IFS= read -r repo; do
     debug "Processing repo: '$repo'"
@@ -647,7 +665,8 @@ while IFS= read -r repo; do
     done
     debug "Spinner loop exited"
 
-    wait "$sync_pid"
+    # Note: || true prevents set -e from exiting if sync_repo returns non-zero
+    wait "$sync_pid" || true
     debug "Wait completed"
     guild_clear_spinner
     sync_result=$(cat "$sync_result_file")
@@ -710,12 +729,15 @@ while IFS= read -r repo; do
 
             temp_results=$(mktemp)
             exit_code=0
+            tool_timed_out=false
 
             debug "Repo-scope tool: $tool_exe $STRICTNESS_FLAG -g $SIGIL -nn $repo_path"
             debug "Temp results file: $temp_results"
+            debug "Timeout: ${MEMBER_TIMEOUT}s"
 
-            # Run tool in background with spinner
-            ("$tool_exe" $STRICTNESS_FLAG -g "$SIGIL" -nn "$repo_path" > /dev/null 2>&1; echo $? > "$temp_results") &
+            # Run tool in background with spinner, with timeout for robustness
+            # Timeout returns 124 on timeout, otherwise returns the command's exit code
+            (timeout "$MEMBER_TIMEOUT" "$tool_exe" $STRICTNESS_FLAG -g "$SIGIL" -nn "$repo_path" > /dev/null 2>&1; echo $? > "$temp_results") &
             tool_pid=$!
             debug "Repo-scope tool PID: $tool_pid"
 
@@ -724,13 +746,23 @@ while IFS= read -r repo; do
                 sleep 0.1
             done
             debug "Repo-scope tool spinner loop exited"
-            wait "$tool_pid"
+
+            # Note: || true prevents set -e from exiting if tool returns non-zero
+            # (exit code 1 = found issues, which is expected behavior not a failure)
+            wait "$tool_pid" || true
             debug "Repo-scope tool wait completed"
             guild_clear_spinner
 
             exit_code=$(cat "$temp_results" 2>/dev/null || echo "2")
             debug "Repo-scope tool exit code: $exit_code"
             rm -f "$temp_results"
+
+            # Handle timeout case (exit code 124 from timeout command)
+            if [[ "$exit_code" -eq 124 ]]; then
+                tool_timed_out=true
+                echo "${YELLOW_COLOR}${WARNING_SYMBOL}${RESET_COLOR} Tool timed out after ${MEMBER_TIMEOUT}s - skipping"
+                continue
+            fi
 
             if [[ "$exit_code" -eq 0 ]]; then
                 echo "${SUCCESS_COLOR}${CHECKMARK}${RESET_COLOR} Clean - repository checked"
@@ -739,7 +771,7 @@ while IFS= read -r repo; do
                 tool_stats["$tool"]=$((tool_stats["$tool"] + 1))
 
                 # Get detailed output (no -g sigil - data already recorded in first call)
-                issues=$("$tool_exe" $STRICTNESS_FLAG -d --prefix="    " "$repo_path" 2>&1)
+                issues=$("$tool_exe" $STRICTNESS_FLAG -d --prefix="    " "$repo_path" 2>&1) || true
                 echo "${FAIL_COLOR}${XMARK}${RESET_COLOR} Issues found"
                 if [[ -n "$issues" ]]; then
                     echo "$issues"
@@ -762,7 +794,8 @@ while IFS= read -r repo; do
             guild_show_spinner "Finding files..."
             sleep 0.1
         done
-        wait "$find_pid"
+        # Note: || true prevents set -e from exiting on non-zero
+        wait "$find_pid" || true
         guild_clear_spinner
 
         while IFS= read -r -d '' file; do
@@ -790,19 +823,22 @@ while IFS= read -r repo; do
         declare -A file_issues
         temp_results=$(mktemp)
 
-        # Run parallel checks
+        # Run parallel checks with overall timeout for robustness
         # Use null byte (\0) as record separator to handle multi-line tool output
-        printf '%s\0' "${files[@]}" | xargs -0 -P "$PARALLEL_JOBS" -I {} bash -c '
-            exit_code=0
-            "$1" $2 -g "$3" -nn "{}" 2>/dev/null || exit_code=$?
+        # Timeout applies to entire file-scope tool execution, not per-file
+        timeout "$MEMBER_TIMEOUT" bash -c '
+            printf "%s\0" "${@:5}" | xargs -0 -P "$1" -I {} bash -c '\''
+                exit_code=0
+                "$1" $2 -g "$3" -nn "{}" 2>/dev/null || exit_code=$?
 
-            if [[ $exit_code -eq 1 ]]; then
-                # Get detailed output (no -g sigil - data already recorded above)
-                issues=$("$1" $2 -d --prefix="    " "{}" 2>&1)
-                # Use null byte as record separator to preserve multi-line issues
-                printf "PROBLEM:%s|||%s\0" "{}" "$issues"
-            fi
-        ' _ "$tool_exe" "$STRICTNESS_FLAG" "$SIGIL" > "$temp_results" 2>/dev/null &
+                if [[ $exit_code -eq 1 ]]; then
+                    # Get detailed output (no -g sigil - data already recorded above)
+                    issues=$("$1" $2 -d --prefix="    " "{}" 2>&1)
+                    # Use null byte as record separator to preserve multi-line issues
+                    printf "PROBLEM:%s|||%s\0" "{}" "$issues"
+                fi
+            '\'' _ "$2" "$3" "$4"
+        ' _ "$PARALLEL_JOBS" "$tool_exe" "$STRICTNESS_FLAG" "$SIGIL" "${files[@]}" > "$temp_results" 2>/dev/null &
 
         xargs_pid=$!
 
@@ -812,7 +848,9 @@ while IFS= read -r repo; do
             sleep 0.1
         done
 
-        wait "$xargs_pid"
+        # Note: || true prevents set -e from exiting on non-zero
+        # (xargs may return non-zero if any file check finds issues)
+        wait "$xargs_pid" || true
         guild_clear_spinner
 
         # Parse results - use null byte as record delimiter to handle multi-line issues
