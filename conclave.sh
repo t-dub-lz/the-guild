@@ -23,7 +23,7 @@ STRICTNESS_FLAG=""
 SCAN_ALL_OVERRIDE=false  # -a flag overrides per-tool config
 DRYRUN=false             # -n flag for guild training mode (counts files only)
 EXCLUDED_MEMBERS=()      # -x flag to exclude specific members
-DEBUG=false              # --debug flag for verbose diagnostic output
+DEBUG=false              # -d flag for verbose diagnostic output
 
 # Generate unique sigil (UUID) for this session
 SIGIL=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || date +%s%N | sha256sum | cut -c1-36)
@@ -73,7 +73,7 @@ show_help() {
     echo "  -n              Guild training - count files without running analysis"
     echo "  -s              Strict mode"
     echo "  -S              Super strict mode"
-    echo "  --debug         Enable debug output (to stderr)"
+    echo "  -d              Enable debug output (to stderr)"
     echo "  -h, --help      Show this help message"
     echo ""
     echo "Arguments:"
@@ -499,7 +499,7 @@ while [[ $# -gt 0 ]]; do
             STRICTNESS_FLAG="-S"
             shift
             ;;
-        --debug)
+        -d)
             DEBUG=true
             shift
             ;;
@@ -711,18 +711,25 @@ while IFS= read -r repo; do
             temp_results=$(mktemp)
             exit_code=0
 
+            debug "Repo-scope tool: $tool_exe $STRICTNESS_FLAG -g $SIGIL -nn $repo_path"
+            debug "Temp results file: $temp_results"
+
             # Run tool in background with spinner
             ("$tool_exe" $STRICTNESS_FLAG -g "$SIGIL" -nn "$repo_path" > /dev/null 2>&1; echo $? > "$temp_results") &
             tool_pid=$!
+            debug "Repo-scope tool PID: $tool_pid"
 
             while kill -0 "$tool_pid" 2>/dev/null; do
                 guild_show_spinner "Analyzing repository..."
                 sleep 0.1
             done
+            debug "Repo-scope tool spinner loop exited"
             wait "$tool_pid"
+            debug "Repo-scope tool wait completed"
             guild_clear_spinner
 
-            exit_code=$(cat "$temp_results")
+            exit_code=$(cat "$temp_results" 2>/dev/null || echo "2")
+            debug "Repo-scope tool exit code: $exit_code"
             rm -f "$temp_results"
 
             if [[ "$exit_code" -eq 0 ]]; then
