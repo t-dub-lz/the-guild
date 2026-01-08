@@ -293,6 +293,27 @@ guild_record_scan() {
     npx tsx "$GUILD_DB" insert-with-findings "$GUILD_TOOL_NAME" - <<< "$insert_data" >/dev/null 2>&1 || true
 }
 
+# Retry database operations with exponential backoff
+# Handles SQLITE_BUSY errors that may occur during parallel repo processing
+# Usage: guild_db_with_retry command args...
+guild_db_with_retry() {
+    local max_retries=5
+    local retry_delay=1
+    local attempt=0
+
+    while [[ $attempt -lt $max_retries ]]; do
+        # Try the command, capture both stdout and exit status
+        if "$@" 2>&1; then
+            return 0
+        fi
+        ((attempt++))
+        # Exponential backoff: 1s, 2s, 4s, 8s, 16s
+        sleep "$retry_delay"
+        retry_delay=$((retry_delay * 2))
+    done
+    return 1
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # ENVIRONMENT FILE LOADING
 # ═══════════════════════════════════════════════════════════════════════════════

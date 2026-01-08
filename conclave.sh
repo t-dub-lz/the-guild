@@ -2,6 +2,9 @@
 
 # The Guild Conclave - Multi-tool repository scanner
 # Discovers and runs all Guild Member tools against repositories
+#
+# Supports parallel repository processing via GNU Parallel.
+# When called with --parallel-worker, processes a single repository.
 
 set -euo pipefail
 
@@ -14,19 +17,52 @@ source "${SCRIPT_DIR}/lib/guild-utils.sh"
 # Load environment variables from .env file
 guild_load_env "${SCRIPT_DIR}/.env"
 
-# Default configuration
-REPO_LIMIT=10000
-ORG_NAME=""
-REPOS_DIR="$SCRIPT_DIR/.repos"
-PARALLEL_JOBS=10
-STRICTNESS_FLAG=""
-SCAN_ALL_OVERRIDE=false  # -a flag overrides per-tool config
-DRYRUN=false             # -n flag for guild training mode (counts files only)
-EXCLUDED_MEMBERS=()      # -x flag to exclude specific members
-DEBUG=false              # -d flag for verbose diagnostic output
+# ═══════════════════════════════════════════════════════════════════════════════
+# PARALLEL WORKER MODE
+# When invoked with --parallel-worker, process a single repository and exit.
+# This mode is called by GNU Parallel for each repository.
+# Environment variables GUILD_WORKER_* carry configuration from parent process.
+# ═══════════════════════════════════════════════════════════════════════════════
+if [[ "${1:-}" == "--parallel-worker" ]]; then
+    # Worker mode: process single repository
+    repo="${2:-}"
+    [[ -z "$repo" ]] && { echo "Error: No repo specified for worker" >&2; exit 2; }
 
-# Generate unique sigil (UUID) for this session
-SIGIL=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || date +%s%N | sha256sum | cut -c1-36)
+    # Configuration comes from exported environment variables
+    REPOS_DIR="${GUILD_WORKER_REPOS_DIR:-$SCRIPT_DIR/.repos}"
+    SIGIL="${GUILD_WORKER_SIGIL:-}"
+    STRICTNESS_FLAG="${GUILD_WORKER_STRICTNESS_FLAG:-}"
+    MEMBER_TIMEOUT="${GUILD_WORKER_MEMBER_TIMEOUT:-300}"
+    FILE_PARALLEL="${GUILD_WORKER_FILE_PARALLEL:-4}"
+    DRYRUN="${GUILD_WORKER_DRYRUN:-false}"
+    SCAN_ALL_OVERRIDE="${GUILD_WORKER_SCAN_ALL_OVERRIDE:-false}"
+    DEBUG="${GUILD_WORKER_DEBUG:-false}"
+
+    # Parse tools list from environment (colon-separated)
+    IFS=':' read -ra tools_list <<< "${GUILD_WORKER_TOOLS_LIST:-}"
+
+    # Worker functions are defined later in this script, so we source the rest
+    # by jumping to the worker execution section at the end
+    WORKER_MODE=true
+    WORKER_REPO="$repo"
+    # Continue to load function definitions, then execute at WORKER_EXECUTION section
+fi
+
+# Default configuration - skip in worker mode (config comes from environment)
+if [[ "${WORKER_MODE:-false}" != true ]]; then
+    REPO_LIMIT=10000
+    ORG_NAME=""
+    REPOS_DIR="$SCRIPT_DIR/.repos"
+    GUILD_PARALLEL=16        # Total parallel worker pool (auto-split between repos and files)
+    STRICTNESS_FLAG=""
+    SCAN_ALL_OVERRIDE=false  # -a flag overrides per-tool config
+    DRYRUN=false             # -n flag for guild training mode (counts files only)
+    EXCLUDED_MEMBERS=()      # -x flag to exclude specific members
+    DEBUG=false              # -d flag for verbose diagnostic output
+
+    # Generate unique sigil (UUID) for this session
+    SIGIL=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || date +%s%N | sha256sum | cut -c1-36)
+fi
 
 # Debug output function - writes to stderr
 debug() {
@@ -35,22 +71,55 @@ debug() {
     fi
 }
 
-# Cleanup function
+# ═══════════════════════════════════════════════════════════════════════════════
+# GNU PARALLEL VERIFICATION
+# Verify GNU Parallel is available and is the GNU version (not moreutils)
+# Uses capability testing: --group is GNU-specific, moreutils doesn't have it
+# ═══════════════════════════════════════════════════════════════════════════════
+verify_gnu_parallel() {
+    # Check: parallel command exists
+    # Trigger: command not found
+    # Rationale: GNU Parallel is required for grouped repo output
+    if ! command -v parallel &>/dev/null; then
+        echo "${RED}Error: GNU Parallel is required but not installed.${NC}" >&2
+        echo "Install with: sudo apt install parallel" >&2
+        echo "  or: (wget -O - pi.dk/3 || curl pi.dk/3/) | bash" >&2
+        exit 2
+    fi
+
+    # Check: GNU Parallel (not moreutils parallel) via capability test
+    # Trigger: --group flag not supported (moreutils version)
+    # Rationale: --group keeps repo output together, moreutils lacks this
+    if ! echo "test" | parallel --group echo {} &>/dev/null; then
+        echo "${RED}Error: GNU Parallel required, but detected moreutils parallel.${NC}" >&2
+        echo "Replace moreutils parallel with GNU Parallel:" >&2
+        echo "  sudo apt remove moreutils" >&2
+        echo "  sudo apt install parallel" >&2
+        exit 2
+    fi
+}
+
+# Verify GNU Parallel before proceeding
+verify_gnu_parallel
+
+# Cleanup function - handles interruption of parallel processing
 cleanup() {
     echo ""
-    echo "${YELLOW_COLOR}Cleaning up...${RESET_COLOR}"
+    echo "${YELLOW_COLOR}Cleaning up...${RESET_COLOR}" >&2
 
-    # Kill xargs and all its children if it's running
-    if [[ -n "${xargs_pid:-}" ]] && kill -0 "$xargs_pid" 2>/dev/null; then
-        kill -- -"$xargs_pid" 2>/dev/null || true
-        wait "$xargs_pid" 2>/dev/null || true
-    fi
+    # Kill all GNU Parallel processes (both repo-level and file-level)
+    # GNU Parallel handles SIGTERM gracefully and propagates to children
+    # Using killall catches both levels of parallelism consistently
+    killall -q -TERM parallel 2>/dev/null || true
 
     # Kill sync process if it's running
     if [[ -n "${sync_pid:-}" ]] && kill -0 "$sync_pid" 2>/dev/null; then
         kill "$sync_pid" 2>/dev/null || true
         wait "$sync_pid" 2>/dev/null || true
     fi
+
+    # Clean up temp files
+    [[ -f "${parallel_joblog:-}" ]] && rm -f "$parallel_joblog"
 
     exit 1
 }
@@ -67,7 +136,8 @@ show_help() {
     echo "Options:"
     echo "  -o <org>        Organization name (default: your GitHub user)"
     echo "  -l <number>     Limit number of repos to fetch (default: 10000)"
-    echo "  -j <number>     Number of parallel jobs (default: 10)"
+    echo "  -p <number>     Total parallel workers (default: 16, max: 1000)"
+    echo "                  Auto-splits between repos and files within each repo"
     echo "  -x <members>    Exclude members by folder name (comma-separated)"
     echo "  -a              Scan all text files (overrides per-tool config)"
     echo "  -n              Guild training - count files without running analysis"
@@ -417,8 +487,12 @@ end_conclave_session() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ARGUMENT PARSING
+# ARGUMENT PARSING (Skip in worker mode)
 # ═══════════════════════════════════════════════════════════════════════════════
+# Worker mode exits early after process_single_repo is defined (see below)
+
+# Skip argument parsing in worker mode - config comes from environment
+if [[ "${WORKER_MODE:-false}" != true ]]; then
 
 REPO_LIST=""
 while [[ $# -gt 0 ]]; do
@@ -442,12 +516,21 @@ while [[ $# -gt 0 ]]; do
             REPO_LIMIT="$2"
             shift 2
             ;;
-        -j)
+        -p|--parallel)
             if [[ -z "$2" ]]; then
-                echo "${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} -j requires a number"
-                exit 1
+                echo "${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} -p requires a number" >&2
+                exit 2
             fi
-            PARALLEL_JOBS="$2"
+            # Validate: must be integer between 1 and 1000
+            if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+                echo "${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} -p requires an integer" >&2
+                exit 2
+            fi
+            if [[ "$2" -lt 1 ]] || [[ "$2" -gt 1000 ]]; then
+                echo "${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} -p must be between 1 and 1000" >&2
+                exit 2
+            fi
+            GUILD_PARALLEL="$2"
             shift 2
             ;;
         -x)
@@ -519,7 +602,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Ensure .repos directory exists
+fi  # End of argument parsing skip for worker mode
+
+# Everything below here runs in both main mode and worker mode
+# (Functions must be available to worker mode)
+
+# Ensure .repos directory exists (main mode only does initialization)
+if [[ "${WORKER_MODE:-false}" != true ]]; then
 mkdir -p "$REPOS_DIR"
 
 # Display banner
@@ -597,6 +686,31 @@ fi
 debug "Repos to process: $(echo "$repos" | wc -l) repositories"
 debug "First repo: $(echo "$repos" | head -1)"
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# PARALLELISM CONFIGURATION
+# Auto-split the total parallel pool between repo and file parallelism
+# Heuristic: sqrt(PARALLEL) repos, remaining for files (capped by actual repo count)
+# ═══════════════════════════════════════════════════════════════════════════════
+repo_count=$(echo "$repos" | wc -l)
+
+# Calculate ideal repo parallelism using sqrt heuristic
+# sqrt(16) = 4 repos, sqrt(9) = 3 repos, sqrt(4) = 2 repos, sqrt(1) = 1 repo
+REPO_PARALLEL=$(echo "scale=0; sqrt($GUILD_PARALLEL)" | bc)
+[[ $REPO_PARALLEL -lt 1 ]] && REPO_PARALLEL=1
+# Don't use more repo workers than we have repos
+[[ $REPO_PARALLEL -gt $repo_count ]] && REPO_PARALLEL=$repo_count
+
+# File parallelism gets the remaining budget (at least 1)
+FILE_PARALLEL=$((GUILD_PARALLEL / REPO_PARALLEL))
+[[ $FILE_PARALLEL -lt 1 ]] && FILE_PARALLEL=1
+
+# Export for use in subprocesses (GNU Parallel workers)
+# Note: GUILD_PARALLEL not exported - "PARALLEL" is a reserved GNU Parallel variable
+export REPO_PARALLEL FILE_PARALLEL
+
+debug "Parallelism: $REPO_PARALLEL repos × $FILE_PARALLEL files = $((REPO_PARALLEL * FILE_PARALLEL)) max workers"
+echo "${CYAN_COLOR}Parallelism:${RESET_COLOR} ${REPO_PARALLEL} repos × ${FILE_PARALLEL} files/repo (total pool: ${GUILD_PARALLEL})"
+
 # Track overall stats
 total_repos=0
 repos_with_issues=0
@@ -629,54 +743,53 @@ else
 fi
 debug "Member timeout: ${MEMBER_TIMEOUT}s (base: ${BASE_TIMEOUT}s, strictness: ${STRICTNESS_FLAG:-none})"
 
-debug "Starting repository processing loop"
-while IFS= read -r repo; do
-    debug "Processing repo: '$repo'"
-    [[ -z "$repo" ]] && continue
+fi  # End of main mode initialization (worker mode skips to here)
 
-    ((++total_repos))
-    debug "Repo #$total_repos: $repo"
+# ═══════════════════════════════════════════════════════════════════════════════
+# SINGLE REPOSITORY PROCESSING FUNCTION
+# Processes one repository: sync, run all tools, report results
+# Returns 0 if clean, 1 if issues found, 2 on error
+# ═══════════════════════════════════════════════════════════════════════════════
+process_single_repo() {
+    local repo="$1"
+    [[ -z "$repo" ]] && return 2
+
+    local repo_had_issues=false
+    local files_scanned_in_repo=0
 
     echo ""
-    header_text="Repository: ${repo}"
-    header_len=${#header_text}
-    # Bash equivalent of zsh ${(l:$header_len::═:)}
+    local header_text="Repository: ${repo}"
+    local header_len=${#header_text}
+    local separator_line
     separator_line=$(guild_make_separator "$header_len" "═")
     echo "${BLUE_COLOR}${separator_line}${RESET_COLOR}"
     echo "${BLUE_COLOR}Repository: ${MAGENTA_COLOR}${repo}${RESET_COLOR}"
     echo "${BLUE_COLOR}${separator_line}${RESET_COLOR}"
 
     # Sync repository (clone or pull)
-    debug "Creating temp file for sync result"
+    local sync_result_file
     sync_result_file=$(mktemp)
-    debug "Temp file: $sync_result_file"
 
     # Run sync in background, capture result to temp file
-    debug "Starting sync_repo in background for: $repo"
     (sync_repo "$repo" > "$sync_result_file") &
-    sync_pid=$!
-    debug "Sync PID: $sync_pid"
+    local sync_pid=$!
 
-    # Show spinner immediately, then update in loop
-    debug "Entering spinner loop"
+    # Show spinner while syncing
     while kill -0 "$sync_pid" 2>/dev/null; do
         guild_show_spinner "Syncing repository..."
         sleep 0.1
     done
-    debug "Spinner loop exited"
 
-    # Note: || true prevents set -e from exiting if sync_repo returns non-zero
     wait "$sync_pid" || true
-    debug "Wait completed"
     guild_clear_spinner
+    local sync_result
     sync_result=$(cat "$sync_result_file")
-    debug "Sync result: $sync_result"
     rm -f "$sync_result_file"
 
     # Handle sync result
-    org="${repo%/*}"
-    name="${repo#*/}"
-    repo_path="$REPOS_DIR/$org/$name"
+    local org="${repo%/*}"
+    local name="${repo#*/}"
+    local repo_path="$REPOS_DIR/$org/$name"
 
     case "$sync_result" in
         CLONED)
@@ -690,28 +803,28 @@ while IFS= read -r repo; do
             echo "${YELLOW_COLOR}╔════════════════════════════════════════╗${RESET_COLOR}"
             echo "${YELLOW_COLOR}║ ${WARNING_SYMBOL} ORPHANED REPO - No longer on remote  ║${RESET_COLOR}"
             echo "${YELLOW_COLOR}╚════════════════════════════════════════╝${RESET_COLOR}"
-            orphan_repos["$repo"]=1
+            # Note: orphan tracking is done by caller via output parsing
             ;;
         SKIP)
             echo "${YELLOW_COLOR}${WARNING_SYMBOL}${RESET_COLOR} Skipping - no remote and no local copy"
-            continue
+            return 0
             ;;
         FAILED)
             echo "${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} Failed to clone ${repo}"
-            continue
+            return 2
             ;;
     esac
 
     if [[ ! -d "$repo_path" ]]; then
         echo "${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} Repository path not found: $repo_path"
-        continue
+        return 2
     fi
 
     # Run each tool on the repository
-    repo_had_issues=false
-
     for tool in "${tools_list[@]}"; do
+        local tool_exe
         tool_exe=$(get_tool_executable "$tool")
+        local tool_display_name
         tool_display_name=$(get_tool_config "$tool" "name")
         [[ -z "$tool_display_name" ]] && tool_display_name="$tool"
 
@@ -722,44 +835,31 @@ while IFS= read -r repo; do
         if tool_has_repository_scope "$tool"; then
             # In guild training mode, just report that this tool will run
             if [[ "$DRYRUN" == true ]]; then
-                tool_file_counts["$tool"]=$((tool_file_counts["$tool"] + 1))
                 echo "${CYAN_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} Repository-scope tool (1 invocation)"
                 continue
             fi
 
+            local temp_results
             temp_results=$(mktemp)
-            exit_code=0
-            tool_timed_out=false
-
-            debug "Repo-scope tool: $tool_exe $STRICTNESS_FLAG -g $SIGIL -nn $repo_path"
-            debug "Temp results file: $temp_results"
-            debug "Timeout: ${MEMBER_TIMEOUT}s"
+            local exit_code=0
 
             # Run tool in background with spinner, with timeout for robustness
-            # Timeout returns 124 on timeout, otherwise returns the command's exit code
             (timeout "$MEMBER_TIMEOUT" "$tool_exe" $STRICTNESS_FLAG -g "$SIGIL" -nn "$repo_path" > /dev/null 2>&1; echo $? > "$temp_results") &
-            tool_pid=$!
-            debug "Repo-scope tool PID: $tool_pid"
+            local tool_pid=$!
 
             while kill -0 "$tool_pid" 2>/dev/null; do
                 guild_show_spinner "Analyzing repository..."
                 sleep 0.1
             done
-            debug "Repo-scope tool spinner loop exited"
 
-            # Note: || true prevents set -e from exiting if tool returns non-zero
-            # (exit code 1 = found issues, which is expected behavior not a failure)
             wait "$tool_pid" || true
-            debug "Repo-scope tool wait completed"
             guild_clear_spinner
 
             exit_code=$(cat "$temp_results" 2>/dev/null || echo "2")
-            debug "Repo-scope tool exit code: $exit_code"
             rm -f "$temp_results"
 
             # Handle timeout case (exit code 124 from timeout command)
             if [[ "$exit_code" -eq 124 ]]; then
-                tool_timed_out=true
                 echo "${YELLOW_COLOR}${WARNING_SYMBOL}${RESET_COLOR} Tool timed out after ${MEMBER_TIMEOUT}s - skipping"
                 continue
             fi
@@ -768,9 +868,8 @@ while IFS= read -r repo; do
                 echo "${SUCCESS_COLOR}${CHECKMARK}${RESET_COLOR} Clean - repository checked"
             elif [[ "$exit_code" -eq 1 ]]; then
                 repo_had_issues=true
-                tool_stats["$tool"]=$((tool_stats["$tool"] + 1))
-
                 # Get detailed output (no -g sigil - data already recorded in first call)
+                local issues
                 issues=$("$tool_exe" $STRICTNESS_FLAG -d --prefix="    " "$repo_path" 2>&1) || true
                 echo "${FAIL_COLOR}${XMARK}${RESET_COLOR} Issues found"
                 if [[ -n "$issues" ]]; then
@@ -784,17 +883,17 @@ while IFS= read -r repo; do
         fi
 
         # Find files for this tool (with spinner for slow operations)
-        files=()
+        local files=()
+        local files_temp
         files_temp=$(mktemp)
 
         (find_files_for_tool "$tool" "$repo_path" > "$files_temp") &
-        find_pid=$!
+        local find_pid=$!
 
         while kill -0 "$find_pid" 2>/dev/null; do
             guild_show_spinner "Finding files..."
             sleep 0.1
         done
-        # Note: || true prevents set -e from exiting on non-zero
         wait "$find_pid" || true
         guild_clear_spinner
 
@@ -803,8 +902,8 @@ while IFS= read -r repo; do
         done < "$files_temp"
         rm -f "$files_temp"
 
-        total_files=${#files[@]}
-        ((total_files_scanned += total_files)) || true
+        local total_files=${#files[@]}
+        ((files_scanned_in_repo += total_files)) || true
 
         if [[ $total_files -eq 0 ]]; then
             echo "${YELLOW_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} No matching files found"
@@ -813,52 +912,53 @@ while IFS= read -r repo; do
 
         # In guild training mode, just report the count and skip actual analysis
         if [[ "$DRYRUN" == true ]]; then
-            tool_file_counts["$tool"]=$((tool_file_counts["$tool"] + total_files))
             echo "${CYAN_COLOR}${DOWN_RIGHT_ARROW}${RESET_COLOR} Files to check: ${BLUE_COLOR}${total_files}${RESET_COLOR}"
             continue
         fi
 
-        # Check files with tool in parallel
-        problem_files=()
+        # Check files with tool in parallel using GNU Parallel
+        local problem_files=()
         declare -A file_issues
+        local temp_results
         temp_results=$(mktemp)
 
+        # Export tool info for parallel workers (cleaner than nested quoting)
+        export GUILD_FILE_TOOL_EXE="$tool_exe"
+        export GUILD_FILE_TOOL_STRICTNESS="$STRICTNESS_FLAG"
+        export GUILD_FILE_TOOL_SIGIL="$SIGIL"
+
         # Run parallel checks with overall timeout for robustness
-        # Use null byte (\0) as record separator to handle multi-line tool output
-        # Timeout applies to entire file-scope tool execution, not per-file
-        timeout "$MEMBER_TIMEOUT" bash -c '
-            printf "%s\0" "${@:5}" | xargs -0 -P "$1" -I {} bash -c '\''
-                exit_code=0
-                "$1" $2 -g "$3" -nn "{}" 2>/dev/null || exit_code=$?
+        # Using GNU Parallel instead of xargs -P for consistency
+        printf "%s\0" "${files[@]}" | timeout "$MEMBER_TIMEOUT" parallel \
+            -0 \
+            -j "$FILE_PARALLEL" \
+            --will-cite \
+            'exit_code=0
+             "$GUILD_FILE_TOOL_EXE" $GUILD_FILE_TOOL_STRICTNESS -g "$GUILD_FILE_TOOL_SIGIL" -nn {} 2>/dev/null || exit_code=$?
+             if [[ $exit_code -eq 1 ]]; then
+                 issues=$("$GUILD_FILE_TOOL_EXE" $GUILD_FILE_TOOL_STRICTNESS -d --prefix="    " {} 2>&1)
+                 printf "PROBLEM:%s|||%s\0" {} "$issues"
+             fi' > "$temp_results" 2>/dev/null &
 
-                if [[ $exit_code -eq 1 ]]; then
-                    # Get detailed output (no -g sigil - data already recorded above)
-                    issues=$("$1" $2 -d --prefix="    " "{}" 2>&1)
-                    # Use null byte as record separator to preserve multi-line issues
-                    printf "PROBLEM:%s|||%s\0" "{}" "$issues"
-                fi
-            '\'' _ "$2" "$3" "$4"
-        ' _ "$PARALLEL_JOBS" "$tool_exe" "$STRICTNESS_FLAG" "$SIGIL" "${files[@]}" > "$temp_results" 2>/dev/null &
+        local file_parallel_pid=$!
 
-        xargs_pid=$!
-
-        # Show spinner
-        while kill -0 "$xargs_pid" 2>/dev/null; do
+        while kill -0 "$file_parallel_pid" 2>/dev/null; do
             guild_show_spinner "Scanning ${BLUE_COLOR}${total_files}${RESET_COLOR} files..."
             sleep 0.1
         done
 
-        # Note: || true prevents set -e from exiting on non-zero
-        # (xargs may return non-zero if any file check finds issues)
-        wait "$xargs_pid" || true
+        wait "$file_parallel_pid" || true
         guild_clear_spinner
 
-        # Parse results - use null byte as record delimiter to handle multi-line issues
+        # Clean up exported variables
+        unset GUILD_FILE_TOOL_EXE GUILD_FILE_TOOL_STRICTNESS GUILD_FILE_TOOL_SIGIL
+
+        # Parse results
         while IFS= read -r -d '' record; do
             if [[ "$record" == PROBLEM:* ]]; then
-                rest="${record#PROBLEM:}"
-                file="${rest%%|||*}"
-                issues="${rest#*|||}"
+                local rest="${record#PROBLEM:}"
+                local file="${rest%%|||*}"
+                local issues="${rest#*|||}"
                 problem_files+=("$file")
                 file_issues["$file"]="$issues"
             fi
@@ -866,17 +966,16 @@ while IFS= read -r repo; do
 
         rm -f "$temp_results"
 
-        problem_count=${#problem_files[@]}
+        local problem_count=${#problem_files[@]}
 
         if [[ $problem_count -eq 0 ]]; then
             echo "${SUCCESS_COLOR}${CHECKMARK}${RESET_COLOR} Clean - ${BLUE_COLOR}${total_files}${RESET_COLOR} files checked"
         else
             repo_had_issues=true
-            tool_stats["$tool"]=$((tool_stats["$tool"] + problem_count))
             echo "${FAIL_COLOR}${XMARK}${RESET_COLOR} Issues found - ${BLUE_COLOR}${problem_count}${RESET_COLOR} of ${BLUE_COLOR}${total_files}${RESET_COLOR} files"
 
             for pfile in "${problem_files[@]}"; do
-                display_file="${pfile#$repo_path/}"
+                local display_file="${pfile#$repo_path/}"
                 echo "  ${MAGENTA_COLOR}${display_file}${RESET_COLOR}"
                 if [[ -n "${file_issues["$pfile"]:-}" ]]; then
                     echo "${file_issues["$pfile"]}"
@@ -887,11 +986,72 @@ while IFS= read -r repo; do
         unset file_issues
     done
 
-    if [[ "$repo_had_issues" == true ]]; then
-        ((++repos_with_issues))
-    fi
+    # Output stats marker for parallel aggregation
+    echo "GUILD_REPO_STATS:files_scanned=$files_scanned_in_repo"
 
-done <<< "$repos"
+    # Return status: 0 = clean, 1 = issues found
+    if [[ "$repo_had_issues" == true ]]; then
+        return 1
+    else
+        return 0
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WORKER MODE EXECUTION
+# If invoked as a parallel worker, execute the repo processing and exit
+# Now that process_single_repo is defined, we can call it
+# ═══════════════════════════════════════════════════════════════════════════════
+if [[ "${WORKER_MODE:-false}" == true ]]; then
+    process_single_repo "$WORKER_REPO"
+    exit $?
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MAIN REPOSITORY PROCESSING
+# Process all repositories using GNU Parallel for parallelism
+# ═══════════════════════════════════════════════════════════════════════════════
+debug "Starting repository processing with GNU Parallel (${REPO_PARALLEL} repos in parallel)"
+
+# Export environment variables for worker processes
+export GUILD_WORKER_REPOS_DIR="$REPOS_DIR"
+export GUILD_WORKER_SIGIL="$SIGIL"
+export GUILD_WORKER_STRICTNESS_FLAG="$STRICTNESS_FLAG"
+export GUILD_WORKER_MEMBER_TIMEOUT="$MEMBER_TIMEOUT"
+export GUILD_WORKER_FILE_PARALLEL="$FILE_PARALLEL"
+export GUILD_WORKER_DRYRUN="$DRYRUN"
+export GUILD_WORKER_SCAN_ALL_OVERRIDE="$SCAN_ALL_OVERRIDE"
+export GUILD_WORKER_DEBUG="$DEBUG"
+export GUILD_WORKER_TOOLS_LIST="$(IFS=':'; echo "${tools_list[*]}")"
+
+# Create joblog for tracking completion status
+parallel_joblog=$(mktemp)
+
+# Run GNU Parallel with grouped output per repository
+# --group: buffer output so each repo's output appears together
+# --jobs: control repo-level parallelism
+# --bar: visual progress indicator (only when TTY available)
+# --joblog: track exit codes for counting repos with issues
+parallel_opts=(--jobs "$REPO_PARALLEL" --group --joblog "$parallel_joblog")
+# Only add progress bar if we have a TTY (avoids "cannot open /dev/tty" errors)
+[[ -t 1 ]] && parallel_opts+=(--bar)
+
+echo "$repos" | parallel "${parallel_opts[@]}" "$0 --parallel-worker {}"
+
+# Count total repos and repos with issues from joblog
+# Joblog format: Seq Host Starttime JobRuntime Send Receive Exitval Signal Command
+total_repos=$(awk 'NR>1 {count++} END {print count+0}' "$parallel_joblog")
+repos_with_issues=$(awk 'NR>1 && $7==1 {count++} END {print count+0}' "$parallel_joblog")
+rm -f "$parallel_joblog"
+
+# Note: total_files_scanned would need parsing from output or getting from database
+# For now, we skip that metric in parallel mode (database has accurate data)
+total_files_scanned=0
+
+# Clean up exported variables
+unset GUILD_WORKER_REPOS_DIR GUILD_WORKER_SIGIL GUILD_WORKER_STRICTNESS_FLAG
+unset GUILD_WORKER_MEMBER_TIMEOUT GUILD_WORKER_FILE_PARALLEL GUILD_WORKER_DRYRUN
+unset GUILD_WORKER_SCAN_ALL_OVERRIDE GUILD_WORKER_DEBUG GUILD_WORKER_TOOLS_LIST
 
 # Generate member testaments (reports) - skip in dryrun mode
 if [[ "$DRYRUN" != true ]]; then

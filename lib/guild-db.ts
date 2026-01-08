@@ -94,6 +94,12 @@ interface InsertWithFindingsData {
 function getDb(): Database.Database {
   const db = new Database(DB_PATH);
   db.pragma('foreign_keys = ON');
+  // WAL mode allows concurrent reads during writes - essential for parallel repo processing
+  db.pragma('journal_mode = WAL');
+  // Wait up to 30s for lock instead of failing immediately on contention
+  db.pragma('busy_timeout = 30000');
+  // NORMAL sync balances safety and performance (full sync on checkpoint only)
+  db.pragma('synchronous = NORMAL');
   return db;
 }
 
@@ -105,11 +111,14 @@ function initDatabase(): void {
   const db = getDb();
 
   // Create conclave table
+  // Note: completed field tracks whether run finished successfully (0=incomplete, 1=complete)
+  // Interrupted or failed runs remain completed=0, only successful end sets completed=1
   db.exec(`
     CREATE TABLE IF NOT EXISTS conclave (
       sigil TEXT PRIMARY KEY,
       started_at TEXT NOT NULL,
       ended_at TEXT,
+      completed INTEGER DEFAULT 0,
       org_name TEXT,
       repo_limit INTEGER,
       strictness_flag TEXT,
@@ -258,9 +267,15 @@ function startConclave(sigil: string, data: ConclaveStartData): void {
 
 function endConclave(sigil: string, stats: ConclaveEndData): void {
   const db = getDb();
+  // Set completed = 1 to mark successful completion
+  // Interrupted/failed runs remain completed = 0 (the default from startConclave)
   const stmt = db.prepare(`
     UPDATE conclave
-    SET ended_at = ?, repo_count = ?, repos_with_issues = ?, total_files_scanned = ?
+    SET ended_at = ?,
+        repo_count = ?,
+        repos_with_issues = ?,
+        total_files_scanned = ?,
+        completed = 1
     WHERE sigil = ?
   `);
   stmt.run(
