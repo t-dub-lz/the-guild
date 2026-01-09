@@ -1028,15 +1028,19 @@ export GUILD_WORKER_TOOLS_LIST="$(IFS=':'; echo "${tools_list[*]}")"
 parallel_joblog=$(mktemp)
 
 # Run GNU Parallel with grouped output per repository
-# --group: buffer output so each repo's output appears together
+# --group: buffer output so each repo's output appears together (no interleaving)
 # --jobs: control repo-level parallelism
-# --bar: visual progress indicator (only when TTY available)
 # --joblog: track exit codes for counting repos with issues
+# Note: Not using --bar/--progress/--eta as they conflict with --group output
 parallel_opts=(--jobs "$REPO_PARALLEL" --group --joblog "$parallel_joblog")
-# Only add progress bar if we have a TTY (avoids "cannot open /dev/tty" errors)
-[[ -t 1 ]] && parallel_opts+=(--bar)
 
-echo "$repos" | parallel "${parallel_opts[@]}" "$0 --parallel-worker {}"
+# Show processing message before starting parallel jobs
+echo ""
+echo "${CYAN_COLOR}Processing ${REPO_PARALLEL} repositories in parallel...${RESET_COLOR}"
+
+# Note: || true prevents set -e from exiting on non-zero (repos with issues return 1)
+# We use joblog to track which repos had issues, not the parallel exit code
+echo "$repos" | parallel "${parallel_opts[@]}" "$0 --parallel-worker {}" || true
 
 # Count total repos and repos with issues from joblog
 # Joblog format: Seq Host Starttime JobRuntime Send Receive Exitval Signal Command
@@ -1076,8 +1080,9 @@ if [[ "$DRYRUN" != true ]]; then
 fi
 
 # End the conclave session (skip in dryrun mode)
+# Note: || true ensures DB failures don't prevent showing the summary
 if [[ "$DRYRUN" != true ]]; then
-    end_conclave_session
+    end_conclave_session || true
 fi
 
 # Final summary
