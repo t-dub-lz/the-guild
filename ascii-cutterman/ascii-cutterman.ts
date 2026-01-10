@@ -1027,9 +1027,10 @@ function generateReport(sigil: string): string {
 
   try {
     // Query scans for this sigil
+    // Note: maxBuffer increased because large orgs can have thousands of scan records
     const scansResult = execSync(
       `npx tsx "${guildDb}" query-scans ascii-cutterman '${sigil}'`,
-      { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+      { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 50 * 1024 * 1024 }
     );
 
     const scans = JSON.parse(scansResult.trim()) as Array<{

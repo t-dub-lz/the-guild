@@ -437,6 +437,62 @@ function queryConclave(sigil: string): unknown {
   return result;
 }
 
+interface StatsResult {
+  total_files_scanned: number;
+  member_stats: Record<string, { files_scanned: number; issues_found: number }>;
+}
+
+function queryStats(sigil: string): StatsResult {
+  const db = getDb();
+
+  // Get all table names ending in _scans (these are member scan tables)
+  const tables = db.prepare(`
+    SELECT name FROM sqlite_master
+    WHERE type='table' AND name LIKE '%_scans' AND name != 'conclave'
+  `).all() as { name: string }[];
+
+  let totalFiles = 0;
+  const memberStats: Record<string, { files_scanned: number; issues_found: number }> = {};
+
+  for (const { name: scansTable } of tables) {
+    // Extract member name from table name (e.g., "ascii_cutterman_scans" -> "ascii-cutterman")
+    const memberName = scansTable.replace(/_scans$/, '').replace(/_/g, '-');
+    const findingsTable = scansTable.replace(/_scans$/, '_findings');
+
+    // Count files scanned for this member
+    try {
+      const filesCount = db.prepare(`
+        SELECT COUNT(*) as count FROM ${scansTable} WHERE sigil = ?
+      `).get(sigil) as { count: number };
+
+      // Count findings for this member (join with scans to filter by sigil)
+      let issuesCount = 0;
+      try {
+        const findings = db.prepare(`
+          SELECT COUNT(*) as count
+          FROM ${findingsTable} f
+          JOIN ${scansTable} s ON f.scan_id = s.id
+          WHERE s.sigil = ?
+        `).get(sigil) as { count: number };
+        issuesCount = findings.count;
+      } catch {
+        // Findings table might not exist for some members
+      }
+
+      totalFiles += filesCount.count;
+      memberStats[memberName] = {
+        files_scanned: filesCount.count,
+        issues_found: issuesCount
+      };
+    } catch {
+      // Table might not exist yet
+    }
+  }
+
+  db.close();
+  return { total_files_scanned: totalFiles, member_stats: memberStats };
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // CLI INTERFACE
 // ═══════════════════════════════════════════════════════════════════════════
@@ -460,6 +516,7 @@ Commands:
 
   query-scans <member> <sigil>            Query scans for a sigil
   query-findings <member> <sigil>         Query findings for a sigil (with scan context)
+  query-stats <sigil>                     Query summary stats (files/issues per member)
 
 Examples:
   guild-db init
@@ -528,6 +585,11 @@ function main(): void {
       case 'query-findings':
         if (!args[0] || !args[1]) { printUsage(); exit(1); }
         stdout.write(JSON.stringify(queryFindings(args[0], args[1])) + '\n');
+        break;
+
+      case 'query-stats':
+        if (!args[0]) { printUsage(); exit(1); }
+        stdout.write(JSON.stringify(queryStats(args[0])) + '\n');
         break;
 
       case '-h':

@@ -1048,9 +1048,18 @@ total_repos=$(awk 'NR>1 {count++} END {print count+0}' "$parallel_joblog")
 repos_with_issues=$(awk 'NR>1 && $7==1 {count++} END {print count+0}' "$parallel_joblog")
 rm -f "$parallel_joblog"
 
-# Note: total_files_scanned would need parsing from output or getting from database
-# For now, we skip that metric in parallel mode (database has accurate data)
-total_files_scanned=0
+# Query summary stats from database (files scanned and issues per member)
+# This is more reliable than tracking in-process since workers run in parallel
+stats_json=$(npx tsx "$SCRIPT_DIR/lib/guild-db.ts" query-stats "$SIGIL" 2>/dev/null || echo '{}')
+total_files_scanned=$(echo "$stats_json" | jq -r '.total_files_scanned // 0')
+
+# Populate tool_stats from database results
+for tool in "${tools_list[@]}"; do
+    # Convert tool folder name to db member name (e.g., "ascii-cutterman" stays same)
+    member_key="$tool"
+    issues=$(echo "$stats_json" | jq -r ".member_stats[\"$member_key\"].issues_found // 0")
+    tool_stats["$tool"]=$issues
+done
 
 # Clean up exported variables
 unset GUILD_WORKER_REPOS_DIR GUILD_WORKER_SIGIL GUILD_WORKER_STRICTNESS_FLAG
