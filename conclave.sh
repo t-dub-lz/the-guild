@@ -986,8 +986,9 @@ process_single_repo() {
         unset file_issues
     done
 
-    # Output stats marker for parallel aggregation
-    echo "GUILD_REPO_STATS:files_scanned=$files_scanned_in_repo"
+    # Visual separator between repositories for readability
+    echo ""
+    echo "================================================================================"
 
     # Return status: 0 = clean, 1 = issues found
     if [[ "$repo_had_issues" == true ]]; then
@@ -1053,12 +1054,14 @@ rm -f "$parallel_joblog"
 stats_json=$(npx tsx "$SCRIPT_DIR/lib/guild-db.ts" query-stats "$SIGIL" 2>/dev/null || echo '{}')
 total_files_scanned=$(echo "$stats_json" | jq -r '.total_files_scanned // 0')
 
-# Populate tool_stats from database results
+# Populate tool_stats from database results and calculate total issues
+total_issues=0
 for tool in "${tools_list[@]}"; do
     # Convert tool folder name to db member name (e.g., "ascii-cutterman" stays same)
     member_key="$tool"
     issues=$(echo "$stats_json" | jq -r ".member_stats[\"$member_key\"].issues_found // 0")
     tool_stats["$tool"]=$issues
+    total_issues=$((total_issues + issues))
 done
 
 # Clean up exported variables
@@ -1150,10 +1153,10 @@ echo ""
 if [[ "$DRYRUN" == true ]]; then
     echo "${SUCCESS_COLOR}${CHECKMARK} Guild training complete - members are ready${RESET_COLOR}"
     exit 0
-elif [[ $repos_with_issues -eq 0 ]]; then
+elif [[ $total_issues -eq 0 ]]; then
     echo "${SUCCESS_COLOR}${CHECKMARK} All repositories are clean!${RESET_COLOR}"
     exit 0
 else
-    echo "${FAIL_COLOR}${XMARK} ${repos_with_issues} repository(s) have issues${RESET_COLOR}"
+    echo "${FAIL_COLOR}${XMARK} ${total_issues} issue(s) found across ${repos_with_issues} repository(s)${RESET_COLOR}"
     exit 1
 fi
