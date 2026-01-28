@@ -1,6 +1,7 @@
 // guild-hall/hooks/useProcess.ts
 import { useState, useCallback, useRef, useEffect } from "react";
 import { Subprocess } from "bun";
+import { resolve, dirname } from "path";
 
 export interface ProcessState {
   running: boolean;
@@ -19,7 +20,14 @@ export interface RunOptions {
   dryRun: boolean;
 }
 
-const CONCLAVE_PATH = "../conclave.sh";
+// Resolve paths relative to this file's location (hooks/useProcess.ts)
+// import.meta.dir = guild-hall/hooks
+// One level up = guild-hall
+// Two levels up = the-guild (project root where conclave.sh lives)
+const HOOKS_DIR = import.meta.dir;  // guild-hall/hooks
+const GUILD_HALL_DIR = dirname(HOOKS_DIR);  // guild-hall
+const PROJECT_ROOT = dirname(GUILD_HALL_DIR);  // the-guild
+const CONCLAVE_PATH = resolve(PROJECT_ROOT, "conclave.sh");
 const MAX_OUTPUT_LINES = 1000;
 
 // Regex to parse structured markers from conclave output
@@ -46,6 +54,7 @@ export function useProcess(onLine?: (line: string) => void) {
       return;
     }
 
+    try {
     // Build command args
     const args = ["--headless"];
     if (options.org) {
@@ -80,8 +89,14 @@ export function useProcess(onLine?: (line: string) => void) {
       output: [],
     });
 
+    // Verify script exists before spawning
+    const scriptFile = Bun.file(CONCLAVE_PATH);
+    if (!await scriptFile.exists()) {
+      throw new Error(`conclave.sh not found at ${CONCLAVE_PATH}`);
+    }
+
     const proc = Bun.spawn([CONCLAVE_PATH, ...args], {
-      cwd: import.meta.dir + "/..",
+      cwd: PROJECT_ROOT,
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -125,6 +140,23 @@ export function useProcess(onLine?: (line: string) => void) {
 
     readLoop();
 
+    // Also stream stderr for error messages
+    const stderrReader = proc.stderr.getReader();
+    const readStderr = async () => {
+      while (true) {
+        const { done, value } = await stderrReader.read();
+        if (done) break;
+        const text = decoder.decode(value, { stream: true });
+        for (const line of text.split("\n")) {
+          if (line.trim()) {
+            outputRef.current.push(`[stderr] ${line}`);
+            setState((s) => ({ ...s, output: [...outputRef.current] }));
+          }
+        }
+      }
+    };
+    readStderr();
+
     // Wait for process to exit
     const exitCode = await proc.exited;
     procRef.current = null;
@@ -134,6 +166,17 @@ export function useProcess(onLine?: (line: string) => void) {
       running: false,
       exitCode,
     }));
+    } catch (err) {
+      // Log error to output so it's visible in the TUI
+      const errorMsg = `[ERROR] Failed to start process: ${err}`;
+      outputRef.current.push(errorMsg);
+      setState((s) => ({
+        ...s,
+        running: false,
+        exitCode: -1,
+        output: [...outputRef.current],
+      }));
+    }
   }, [onLine]);
 
   const stop = useCallback(() => {
