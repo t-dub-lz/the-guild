@@ -154,3 +154,37 @@ large files that may need refactoring.
 - `gh` - GitHub CLI (for repo listing and cloning)
 - `jq` or `python3` - For parsing config.jsonc
 - Tool-specific dependencies (e.g., `bun` for TypeScript tools)
+
+## Guild Hall (TUI)
+
+Guild Hall provides an interactive terminal interface for The Guild.
+
+### Quick Start
+
+```bash
+# Install dependencies
+just install-hall
+
+# Launch TUI
+just hall
+# or directly:
+./guild-hall/bin/guild-hall
+```
+
+### Features
+
+- **New Run**: Configure and launch scans with visual form
+- **Current**: Monitor active scans with live progress
+- **History**: Browse past runs and drill into findings
+
+### Navigation
+
+| Key | Action |
+|-----|--------|
+| `h/←` `l/→` | Switch tabs |
+| `j/↓` `k/↑` | Navigate lists/forms |
+| `Enter` | Select/activate |
+| `Space` | Toggle checkbox |
+| `Esc` | Go back |
+| `q` | Quit |
+| `1` `2` `3` | Jump to tab |
