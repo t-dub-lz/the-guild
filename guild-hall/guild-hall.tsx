@@ -185,12 +185,12 @@ function App() {
                   issueCount={0}
                 />
                 <Box flexGrow={1}>
+                  <LiveLog lines={process.output} />
                   <MemberCards
                     members={memberStatuses}
                     selectedIndex={0}
                     focused={false}
                   />
-                  <LiveLog lines={process.output} />
                 </Box>
               </>
             ) : (

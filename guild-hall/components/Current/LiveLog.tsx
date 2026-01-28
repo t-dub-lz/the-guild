@@ -14,11 +14,12 @@ export function LiveLog({ lines, maxLines = 20 }: LiveLogProps) {
     <Box
       flexDirection="column"
       width="50%"
+      overflow="hidden"
       borderStyle="single"
-      borderLeft
+      borderRight
       borderTop={false}
       borderBottom={false}
-      borderRight={false}
+      borderLeft={false}
       paddingX={1}
     >
       {displayLines.map((line, i) => {
