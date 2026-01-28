@@ -63,6 +63,8 @@ const FIELD_ORDER: FieldId[] = [
 export function NewRunForm({ defaults, onSubmit, active }: NewRunFormProps) {
   const [focusIndex, setFocusIndex] = useState(0);
   const [memberFocusIndex, setMemberFocusIndex] = useState(0);
+  const [repoModeIndex, setRepoModeIndex] = useState(0);
+  const [editingOrg, setEditingOrg] = useState(false);
 
   const [form, setForm] = useState<FormState>(() => ({
     org: defaults.org,
@@ -81,53 +83,72 @@ export function NewRunForm({ defaults, onSubmit, active }: NewRunFormProps) {
 
   useKeys(
     (key) => {
+      // When editing org field, only handle escape to exit edit mode
+      if (editingOrg) {
+        if (key === "escape" || key === "return") {
+          setEditingOrg(false);
+        }
+        return;
+      }
+
+      // Vertical navigation (j/k or up/down)
       if (key === "down") {
-        if (currentField === "members") {
-          if (memberFocusIndex < MEMBER_LIST.length - 1) {
-            setMemberFocusIndex((i) => i + 1);
-          } else {
-            setFocusIndex((i) => Math.min(i + 1, FIELD_ORDER.length - 1));
-            setMemberFocusIndex(0);
-          }
-        } else {
-          setFocusIndex((i) => Math.min(i + 1, FIELD_ORDER.length - 1));
-        }
+        setFocusIndex((i) => Math.min(i + 1, FIELD_ORDER.length - 1));
+        // Reset sub-indices when moving to new field
+        setMemberFocusIndex(0);
+        setRepoModeIndex(0);
       } else if (key === "up") {
-        if (currentField === "members" && memberFocusIndex > 0) {
-          setMemberFocusIndex((i) => i - 1);
-        } else {
-          setFocusIndex((i) => Math.max(i - 1, 0));
-          if (FIELD_ORDER[Math.max(focusIndex - 1, 0)] === "members") {
-            setMemberFocusIndex(MEMBER_LIST.length - 1);
-          }
+        setFocusIndex((i) => Math.max(i - 1, 0));
+        setMemberFocusIndex(0);
+        setRepoModeIndex(0);
+      }
+      // Horizontal navigation (h/l or left/right) for members
+      else if (key === "left") {
+        if (currentField === "members") {
+          setMemberFocusIndex((i) => Math.max(i - 1, 0));
+        } else if (currentField === "parallelism") {
+          setForm((f) => ({ ...f, parallelism: Math.max(1, f.parallelism - 1) }));
         }
-      } else if (key === " ") {
-        // Toggle checkboxes
+      } else if (key === "right") {
+        if (currentField === "members") {
+          setMemberFocusIndex((i) => Math.min(i + 1, MEMBER_LIST.length - 1));
+        } else if (currentField === "parallelism") {
+          setForm((f) => ({ ...f, parallelism: Math.min(100, f.parallelism + 1) }));
+        }
+      }
+      // Space to toggle checkboxes/radios
+      else if (key === " ") {
         if (currentField === "members") {
           const memberId = MEMBER_LIST[memberFocusIndex].id;
           setForm((f) => ({
             ...f,
             members: { ...f.members, [memberId]: !f.members[memberId] },
           }));
+        } else if (currentField === "repoMode") {
+          // Toggle between the two repo modes
+          const newMode = form.repoMode === "all" ? "select" : "all";
+          setForm((f) => ({ ...f, repoMode: newMode }));
+          setRepoModeIndex(newMode === "all" ? 0 : 1);
         } else if (
           ["strict", "superStrict", "scanAll", "dryRun"].includes(currentField)
         ) {
           setForm((f) => ({ ...f, [currentField]: !f[currentField as keyof FormState] }));
         }
-      } else if (key === "return") {
+      }
+      // Enter to submit or edit text field
+      else if (key === "return") {
         if (currentField === "submit") {
           onSubmit(form);
+        } else if (currentField === "org") {
+          setEditingOrg(true);
+        } else if (currentField === "repoMode") {
+          // Select the focused repo mode option
+          const newMode = repoModeIndex === 0 ? "all" : "select";
+          setForm((f) => ({ ...f, repoMode: newMode }));
         }
-      } else if (key === "left" && currentField === "parallelism") {
-        setForm((f) => ({ ...f, parallelism: Math.max(1, f.parallelism - 1) }));
-      } else if (key === "right" && currentField === "parallelism") {
-        setForm((f) => ({
-          ...f,
-          parallelism: Math.min(100, f.parallelism + 1),
-        }));
       }
     },
-    active
+    active && !editingOrg
   );
 
   return (
@@ -136,6 +157,8 @@ export function NewRunForm({ defaults, onSubmit, active }: NewRunFormProps) {
         label="Organization"
         value={form.org}
         focused={currentField === "org"}
+        editing={editingOrg}
+        onChange={(v) => setForm((f) => ({ ...f, org: v }))}
       />
 
       <Box marginTop={1} flexDirection="column">
@@ -147,8 +170,9 @@ export function NewRunForm({ defaults, onSubmit, active }: NewRunFormProps) {
           ]}
           selected={form.repoMode}
           focused={currentField === "repoMode"}
-          focusedIndex={0}
+          focusedIndex={repoModeIndex}
         />
+        {currentField === "repoMode" && <Text dimColor> (Space to toggle)</Text>}
       </Box>
 
       <Box marginTop={1} flexDirection="column">

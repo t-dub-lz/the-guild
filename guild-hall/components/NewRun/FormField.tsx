@@ -1,22 +1,40 @@
 // guild-hall/components/NewRun/FormField.tsx
-import React from "react";
-import { Box, Text } from "ink";
+import React, { useState } from "react";
+import { Box, Text, useInput } from "ink";
 
 interface TextFieldProps {
   label: string;
   value: string;
   focused: boolean;
+  editing?: boolean;
   onChange?: (value: string) => void;
 }
 
-export function TextField({ label, value, focused }: TextFieldProps) {
+export function TextField({ label, value, focused, editing, onChange }: TextFieldProps) {
+  // Handle text input when editing
+  useInput(
+    (input, key) => {
+      if (!editing || !onChange) return;
+
+      if (key.backspace || key.delete) {
+        onChange(value.slice(0, -1));
+      } else if (!key.ctrl && !key.meta && input && input.length === 1) {
+        // Only add printable characters
+        onChange(value + input);
+      }
+    },
+    { isActive: editing }
+  );
+
   return (
     <Box>
       <Text>{label}: </Text>
       <Text bold={focused} inverse={focused}>
         {" "}
-        {value || "(empty)"}{" "}
+        {value || "(empty)"}
+        {editing ? "▌" : ""}{" "}
       </Text>
+      {focused && !editing && <Text dimColor> (Enter to edit)</Text>}
     </Box>
   );
 }

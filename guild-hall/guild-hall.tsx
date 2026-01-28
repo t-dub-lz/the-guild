@@ -52,24 +52,30 @@ function App() {
     return () => clearInterval(interval);
   }, [process.running]);
 
-  // Global key handling
+  // Global key handling - always active for q and number keys
   useKeys((key) => {
+    // Always allow quit and tab switching via numbers
     if (key === "q") {
       exit();
-    } else if (key === "left") {
-      goLeft();
-    } else if (key === "right") {
-      goRight();
     } else if (key === "1") {
       goToTab(1);
     } else if (key === "2") {
       goToTab(2);
     } else if (key === "3") {
       goToTab(3);
+    }
+  }, true); // Always active
+
+  // Tab navigation with h/l - disabled when on new-run (form uses h/l for members)
+  useKeys((key) => {
+    if (key === "left") {
+      goLeft();
+    } else if (key === "right") {
+      goRight();
     } else if (key === "escape" && selectedRun) {
       setSelectedRun(null);
     }
-  }, activeTab !== "new-run"); // Disable when form is active
+  }, activeTab !== "new-run");
 
   // History navigation
   useKeys((key) => {
@@ -118,14 +124,14 @@ function App() {
   // Footer hints based on context
   const getHints = () => {
     if (activeTab === "new-run") {
-      return "↑/k ↓/j:move  Space:toggle  Enter:activate  Tab:section";
+      return "↑/k ↓/j:fields  ←/h →/l:members  Space:toggle  Enter:edit/submit  1-3:tabs  q:quit";
     } else if (activeTab === "current") {
-      return "↑/k ↓/j:select member  Enter:view findings  Esc:back";
+      return "←/h →/l:tabs  ↑/k ↓/j:select member  Enter:view findings  1-3:tabs  q:quit";
     } else if (activeTab === "history") {
       if (selectedRun) {
-        return "↑/k ↓/j:select  Enter:view findings  Esc/Backspace:back";
+        return "←/h →/l:tabs  ↑/k ↓/j:select  Enter:view findings  Esc:back  q:quit";
       }
-      return "↑/k ↓/j:navigate  Enter:view details  g/G:top/bottom";
+      return "←/h →/l:tabs  ↑/k ↓/j:navigate  Enter:view details  g/G:top/bottom  q:quit";
     }
     return "";
   };
