@@ -27,7 +27,7 @@ export function RunList({ runs, selectedIndex, focused }: RunListProps) {
         visibleRuns.map((run, i) => {
           const actualIndex = i + scrollOffset;
           const isSelected = focused && actualIndex === selectedIndex;
-          const hasIssues = run.repos_with_issues > 0;
+          const hasIssues = (run.repos_with_issues ?? 0) > 0;
 
           // Format date
           const date = new Date(run.started_at);
@@ -39,11 +39,11 @@ export function RunList({ runs, selectedIndex, focused }: RunListProps) {
                 {isSelected ? "▸" : " "} {dateStr}
               </Text>
               <Text>{"  "}</Text>
-              <Text>{run.org_name.padEnd(15)}</Text>
-              <Text>{String(run.repo_count).padStart(4)} repos</Text>
+              <Text>{(run.org_name || "(no org)").padEnd(15)}</Text>
+              <Text>{String(run.repo_count ?? 0).padStart(4)} repos</Text>
               <Text>{"  "}</Text>
               <Text color={hasIssues ? "red" : "green"}>
-                {String(run.repos_with_issues).padStart(4)} issues
+                {String(run.repos_with_issues ?? 0).padStart(4)} issues
               </Text>
               <Text>{"  "}</Text>
               <Text color={hasIssues ? "red" : "green"}>

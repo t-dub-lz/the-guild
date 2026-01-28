@@ -45,12 +45,12 @@ export function RunDetail({
       <Text>{"═".repeat(50)}</Text>
 
       <Box flexDirection="column" marginY={1}>
-        <Text>Organization:  {run.org_name}</Text>
+        <Text>Organization:  {run.org_name || "(no org)"}</Text>
         <Text>Duration:      {duration}</Text>
         <Text>
-          Repositories:  {run.repo_count} scanned, {run.repos_with_issues} with issues
+          Repositories:  {run.repo_count ?? 0} scanned, {run.repos_with_issues ?? 0} with issues
         </Text>
-        <Text>Files:         {run.total_files_scanned.toLocaleString()} total</Text>
+        <Text>Files:         {(run.total_files_scanned ?? 0).toLocaleString()} total</Text>
       </Box>
 
       <Text bold>Members' Verdicts:</Text>

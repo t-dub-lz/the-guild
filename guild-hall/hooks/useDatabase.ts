@@ -12,12 +12,12 @@ export interface ConclaveRun {
   sigil: string;
   started_at: string;
   ended_at: string | null;
-  org_name: string;
-  repo_count: number;
-  repos_with_issues: number;
-  total_files_scanned: number;
-  members: string;
-  dryrun: number;
+  org_name: string | null;
+  repo_count: number | null;
+  repos_with_issues: number | null;
+  total_files_scanned: number | null;
+  members: string | null;
+  dryrun: number | null;
 }
 
 export function useDatabase() {
