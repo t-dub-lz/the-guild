@@ -1,0 +1,22 @@
+{
+  "name": "guild-hall",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "guild-hall": "./guild-hall.tsx"
+  },
+  "scripts": {
+    "start": "bun run guild-hall.tsx",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ink": "^5.0.1",
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "^18.3.3",
+    "typescript": "^5.5.0"
+  }
+}
