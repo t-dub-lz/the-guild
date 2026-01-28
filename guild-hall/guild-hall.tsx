@@ -57,15 +57,13 @@ function App() {
 
   // Global key handling - active when not editing text fields
   useKeys((key) => {
-    // Allow quit and tab switching via numbers (but not during text input)
+    // Allow quit (but not during text input)
     if (key === "q") {
       exit();
-    } else if (key === "1") {
-      goToTab(1);
-    } else if (key === "2") {
-      goToTab(2);
-    } else if (key === "3") {
-      goToTab(3);
+    } else if (key === "tab") {
+      goRight(); // Tab cycles forward through tabs
+    } else if (key === "backtab") {
+      goLeft(); // Shift+Tab cycles backward
     }
   }, !isEditing); // Disabled during text editing
 
@@ -127,14 +125,14 @@ function App() {
   // Footer hints based on context
   const getHints = () => {
     if (activeTab === "new-run") {
-      return "↑/k ↓/j:fields  ←/h →/l:members  Space:toggle  Enter:edit/submit  1-3:tabs  q:quit";
+      return "↑/k ↓/j:fields  ←/h →/l:options  Space:toggle  Enter:edit/submit  Tab:switch tabs  q:quit";
     } else if (activeTab === "current") {
-      return "←/h →/l:tabs  ↑/k ↓/j:select member  Enter:view findings  1-3:tabs  q:quit";
+      return "↑/k ↓/j:select member  Enter:view findings  Tab:switch tabs  q:quit";
     } else if (activeTab === "history") {
       if (selectedRun) {
-        return "←/h →/l:tabs  ↑/k ↓/j:select  Enter:view findings  Esc:back  q:quit";
+        return "↑/k ↓/j:select  Enter:view findings  Esc:back  Tab:switch tabs  q:quit";
       }
-      return "←/h →/l:tabs  ↑/k ↓/j:navigate  Enter:view details  g/G:top/bottom  q:quit";
+      return "↑/k ↓/j:navigate  Enter:view details  g/G:top/bottom  Tab:switch tabs  q:quit";
     }
     return "";
   };

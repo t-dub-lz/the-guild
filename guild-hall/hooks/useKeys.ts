@@ -37,6 +37,7 @@ export function useKeys(handler: KeyHandler, active: boolean = true) {
       else if (key.downArrow) rawKey = "downArrow";
       else if (key.return) rawKey = "return";
       else if (key.escape) rawKey = "escape";
+      else if (key.tab && key.shift) rawKey = "backtab"; // Shift+Tab
       else if (key.tab) rawKey = "tab";
       else if (key.backspace) rawKey = "backspace";
 
