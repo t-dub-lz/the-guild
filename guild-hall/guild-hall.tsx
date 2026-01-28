@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import React, { useState, useEffect } from "react";
-import { render, Box, Text, useApp } from "ink";
+import { render, Box, Text, useApp, useStdout } from "ink";
 
 import { TabBar, TabName, useTabNavigation } from "./components/TabBar";
 import { Footer } from "./components/Footer";
@@ -18,8 +18,22 @@ import defaults from "./defaults.json";
 
 function App() {
   const { exit } = useApp();
+  const { stdout } = useStdout();
   const [activeTab, setActiveTab] = useState<TabName>("new-run");
   const { goLeft, goRight, goToTab } = useTabNavigation(activeTab, setActiveTab);
+
+  // Terminal dimensions (with resize handling)
+  const [termSize, setTermSize] = useState({ cols: stdout.columns, rows: stdout.rows });
+
+  useEffect(() => {
+    const onResize = () => {
+      setTermSize({ cols: stdout.columns, rows: stdout.rows });
+    };
+    stdout.on("resize", onResize);
+    return () => {
+      stdout.off("resize", onResize);
+    };
+  }, [stdout]);
 
   // Database
   const db = useDatabase();
@@ -156,7 +170,7 @@ function App() {
   ];
 
   return (
-    <Box flexDirection="column" height="100%">
+    <Box flexDirection="column" width={termSize.cols} height={termSize.rows}>
       <TabBar
         activeTab={activeTab}
         onTabChange={setActiveTab}
