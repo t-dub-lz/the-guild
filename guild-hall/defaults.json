@@ -1,0 +1,20 @@
+{
+  "org": "",
+  "members": [
+    "ascii-cutterman",
+    "secretary",
+    "sentinel",
+    "catburglar",
+    "the-judge"
+  ],
+  "parallelism": 10,
+  "strict": false,
+  "superStrict": false,
+  "scanAll": false,
+  "dryRun": false,
+  "ui": {
+    "pollIntervalMs": 500,
+    "logBufferLines": 1000,
+    "theme": "default"
+  }
+}
