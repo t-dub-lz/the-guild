@@ -31,6 +31,9 @@ function App() {
   const [selectedRun, setSelectedRun] = useState<ConclaveRun | null>(null);
   const [memberIndex, setMemberIndex] = useState(0);
 
+  // Form editing state (to disable global keys during text input)
+  const [isEditing, setIsEditing] = useState(false);
+
   // Process state
   const process = useProcess();
 
@@ -52,9 +55,9 @@ function App() {
     return () => clearInterval(interval);
   }, [process.running]);
 
-  // Global key handling - always active for q and number keys
+  // Global key handling - active when not editing text fields
   useKeys((key) => {
-    // Always allow quit and tab switching via numbers
+    // Allow quit and tab switching via numbers (but not during text input)
     if (key === "q") {
       exit();
     } else if (key === "1") {
@@ -64,7 +67,7 @@ function App() {
     } else if (key === "3") {
       goToTab(3);
     }
-  }, true); // Always active
+  }, !isEditing); // Disabled during text editing
 
   // Tab navigation with h/l - disabled when on new-run (form uses h/l for members)
   useKeys((key) => {
@@ -168,6 +171,7 @@ function App() {
             defaults={defaults}
             onSubmit={handleNewRun}
             active={activeTab === "new-run"}
+            onEditingChange={setIsEditing}
           />
         )}
 

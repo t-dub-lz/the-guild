@@ -8,13 +8,22 @@ interface TextFieldProps {
   focused: boolean;
   editing?: boolean;
   onChange?: (value: string) => void;
+  onEditComplete?: () => void;
 }
 
-export function TextField({ label, value, focused, editing, onChange }: TextFieldProps) {
+export function TextField({ label, value, focused, editing, onChange, onEditComplete }: TextFieldProps) {
   // Handle text input when editing
   useInput(
     (input, key) => {
-      if (!editing || !onChange) return;
+      if (!editing) return;
+
+      // Exit editing mode on Enter or Escape
+      if (key.return || key.escape) {
+        onEditComplete?.();
+        return;
+      }
+
+      if (!onChange) return;
 
       if (key.backspace || key.delete) {
         onChange(value.slice(0, -1));
@@ -35,6 +44,7 @@ export function TextField({ label, value, focused, editing, onChange }: TextFiel
         {editing ? "▌" : ""}{" "}
       </Text>
       {focused && !editing && <Text dimColor> (Enter to edit)</Text>}
+      {editing && <Text dimColor> (Enter/Esc to confirm)</Text>}
     </Box>
   );
 }

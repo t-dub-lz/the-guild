@@ -1,5 +1,5 @@
 // guild-hall/components/NewRun/NewRunForm.tsx
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Box, Text } from "ink";
 import { TextField, Checkbox, RadioGroup, NumberField } from "./FormField";
 import { useKeys } from "../../hooks/useKeys";
@@ -27,6 +27,7 @@ interface NewRunFormProps {
   };
   onSubmit: (state: FormState) => void;
   active: boolean;
+  onEditingChange?: (editing: boolean) => void;
 }
 
 const MEMBER_LIST = [
@@ -41,10 +42,7 @@ type FieldId =
   | "org"
   | "repoMode"
   | "members"
-  | "strict"
-  | "superStrict"
-  | "scanAll"
-  | "dryRun"
+  | "options"
   | "parallelism"
   | "submit";
 
@@ -52,17 +50,23 @@ const FIELD_ORDER: FieldId[] = [
   "org",
   "repoMode",
   "members",
-  "strict",
-  "superStrict",
-  "scanAll",
-  "dryRun",
+  "options",
   "parallelism",
   "submit",
 ];
 
-export function NewRunForm({ defaults, onSubmit, active }: NewRunFormProps) {
+// Options are navigated horizontally as a group
+const OPTIONS_LIST = [
+  { id: "strict", label: "Strict (-s)" },
+  { id: "superStrict", label: "Super strict (-S)" },
+  { id: "scanAll", label: "Scan all" },
+  { id: "dryRun", label: "Dry run" },
+] as const;
+
+export function NewRunForm({ defaults, onSubmit, active, onEditingChange }: NewRunFormProps) {
   const [focusIndex, setFocusIndex] = useState(0);
   const [memberFocusIndex, setMemberFocusIndex] = useState(0);
+  const [optionFocusIndex, setOptionFocusIndex] = useState(0);
   const [repoModeIndex, setRepoModeIndex] = useState(0);
   const [editingOrg, setEditingOrg] = useState(false);
 
@@ -81,37 +85,40 @@ export function NewRunForm({ defaults, onSubmit, active }: NewRunFormProps) {
 
   const currentField = FIELD_ORDER[focusIndex];
 
+  // Notify parent when editing state changes
+  useEffect(() => {
+    onEditingChange?.(editingOrg);
+  }, [editingOrg, onEditingChange]);
+
   useKeys(
     (key) => {
-      // When editing org field, only handle escape to exit edit mode
-      if (editingOrg) {
-        if (key === "escape" || key === "return") {
-          setEditingOrg(false);
-        }
-        return;
-      }
-
       // Vertical navigation (j/k or up/down)
       if (key === "down") {
         setFocusIndex((i) => Math.min(i + 1, FIELD_ORDER.length - 1));
         // Reset sub-indices when moving to new field
         setMemberFocusIndex(0);
+        setOptionFocusIndex(0);
         setRepoModeIndex(0);
       } else if (key === "up") {
         setFocusIndex((i) => Math.max(i - 1, 0));
         setMemberFocusIndex(0);
+        setOptionFocusIndex(0);
         setRepoModeIndex(0);
       }
-      // Horizontal navigation (h/l or left/right) for members
+      // Horizontal navigation (h/l or left/right) for horizontal groups
       else if (key === "left") {
         if (currentField === "members") {
           setMemberFocusIndex((i) => Math.max(i - 1, 0));
+        } else if (currentField === "options") {
+          setOptionFocusIndex((i) => Math.max(i - 1, 0));
         } else if (currentField === "parallelism") {
           setForm((f) => ({ ...f, parallelism: Math.max(1, f.parallelism - 1) }));
         }
       } else if (key === "right") {
         if (currentField === "members") {
           setMemberFocusIndex((i) => Math.min(i + 1, MEMBER_LIST.length - 1));
+        } else if (currentField === "options") {
+          setOptionFocusIndex((i) => Math.min(i + 1, OPTIONS_LIST.length - 1));
         } else if (currentField === "parallelism") {
           setForm((f) => ({ ...f, parallelism: Math.min(100, f.parallelism + 1) }));
         }
@@ -124,15 +131,14 @@ export function NewRunForm({ defaults, onSubmit, active }: NewRunFormProps) {
             ...f,
             members: { ...f.members, [memberId]: !f.members[memberId] },
           }));
+        } else if (currentField === "options") {
+          const optionId = OPTIONS_LIST[optionFocusIndex].id;
+          setForm((f) => ({ ...f, [optionId]: !f[optionId] }));
         } else if (currentField === "repoMode") {
           // Toggle between the two repo modes
           const newMode = form.repoMode === "all" ? "select" : "all";
           setForm((f) => ({ ...f, repoMode: newMode }));
           setRepoModeIndex(newMode === "all" ? 0 : 1);
-        } else if (
-          ["strict", "superStrict", "scanAll", "dryRun"].includes(currentField)
-        ) {
-          setForm((f) => ({ ...f, [currentField]: !f[currentField as keyof FormState] }));
         }
       }
       // Enter to submit or edit text field
@@ -159,6 +165,7 @@ export function NewRunForm({ defaults, onSubmit, active }: NewRunFormProps) {
         focused={currentField === "org"}
         editing={editingOrg}
         onChange={(v) => setForm((f) => ({ ...f, org: v }))}
+        onEditComplete={() => setEditingOrg(false)}
       />
 
       <Box marginTop={1} flexDirection="column">
@@ -192,28 +199,14 @@ export function NewRunForm({ defaults, onSubmit, active }: NewRunFormProps) {
       <Box marginTop={1} flexDirection="column">
         <Text>Options:</Text>
         <Box flexDirection="row" gap={2}>
-          <Checkbox
-            label="Strict mode (-s)"
-            checked={form.strict}
-            focused={currentField === "strict"}
-          />
-          <Checkbox
-            label="Super strict (-S)"
-            checked={form.superStrict}
-            focused={currentField === "superStrict"}
-          />
-        </Box>
-        <Box flexDirection="row" gap={2}>
-          <Checkbox
-            label="Scan all files"
-            checked={form.scanAll}
-            focused={currentField === "scanAll"}
-          />
-          <Checkbox
-            label="Dry run"
-            checked={form.dryRun}
-            focused={currentField === "dryRun"}
-          />
+          {OPTIONS_LIST.map((opt, i) => (
+            <Checkbox
+              key={opt.id}
+              label={opt.label}
+              checked={form[opt.id]}
+              focused={currentField === "options" && optionFocusIndex === i}
+            />
+          ))}
         </Box>
       </Box>
 
