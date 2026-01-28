@@ -153,7 +153,7 @@ function App() {
   // Footer hints based on context
   const getHints = () => {
     if (activeTab === "new-run") {
-      return "↑/k ↓/j:fields  ←/h →/l:options  Space:toggle  Enter:edit/submit  Tab:switch tabs  q:quit";
+      return "↑/k ↓/j:fields  ←/h →/l:options  Space:toggle  i/Enter:edit  Tab:tabs  q:quit";
     } else if (activeTab === "current") {
       return "↑/k ↓/j:select member  Enter:view findings  Tab:switch tabs  q:quit";
     } else if (activeTab === "history") {

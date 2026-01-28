@@ -43,7 +43,7 @@ export function TextField({ label, value, focused, editing, onChange, onEditComp
         {value || "(empty)"}
         {editing ? "▌" : ""}{" "}
       </Text>
-      {focused && !editing && <Text dimColor> (Enter to edit)</Text>}
+      {focused && !editing && <Text dimColor> (i/Enter to edit)</Text>}
       {editing && <Text dimColor> (Enter/Esc to confirm)</Text>}
     </Box>
   );

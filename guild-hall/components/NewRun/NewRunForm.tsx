@@ -142,6 +142,12 @@ export function NewRunForm({ form, onFormChange, onSubmit, active, onEditingChan
           setForm((f) => ({ ...f, repoMode: newMode }));
         }
       }
+      // 'i' to enter edit mode (vim-style insert)
+      else if (key === "i") {
+        if (currentField === "org") {
+          setEditingOrg(true);
+        }
+      }
     },
     active && !editingOrg
   );
