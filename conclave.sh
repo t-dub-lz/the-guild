@@ -59,6 +59,7 @@ if [[ "${WORKER_MODE:-false}" != true ]]; then
     DRYRUN=false             # -n flag for guild training mode (counts files only)
     EXCLUDED_MEMBERS=()      # -x flag to exclude specific members
     DEBUG=false              # -d flag for verbose diagnostic output
+    HEADLESS=false           # --headless flag for TUI integration
 
     # Generate unique sigil (UUID) for this session
     SIGIL=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || date +%s%N | sha256sum | cut -c1-36)
@@ -69,6 +70,43 @@ debug() {
     if [[ "$DEBUG" == true ]]; then
         echo "[DEBUG] $*" >&2
     fi
+}
+
+# Structured marker output for guild-hall TUI integration
+# Emits parseable markers that don't interfere with human output
+emit_marker() {
+    if [[ "$HEADLESS" == true ]]; then
+        echo "$1"
+    fi
+}
+
+emit_sigil() {
+    emit_marker "[SIGIL:$SIGIL]"
+}
+
+emit_org() {
+    emit_marker "[ORG:$ORG_NAME]"
+}
+
+emit_repo_start() {
+    emit_marker "[REPO:START:$1]"
+}
+
+emit_repo_end() {
+    emit_marker "[REPO:END:$1]"
+}
+
+emit_progress() {
+    emit_marker "[PROGRESS:$1:$2]"
+}
+
+emit_finding() {
+    # Args: member, repo, filepath, line, type
+    emit_marker "[FINDING:$1:$2:$3:$4:$5]"
+}
+
+emit_done() {
+    emit_marker "[DONE:$1]"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -144,6 +182,7 @@ show_help() {
     echo "  -s              Strict mode (2x member timeout)"
     echo "  -S              Super strict mode (3x member timeout)"
     echo "  -d              Enable debug output (to stderr)"
+    echo "  --headless      Machine-readable output for TUI integration"
     echo "  -h, --help      Show this help message"
     echo ""
     echo "Environment Variables:"
@@ -590,6 +629,10 @@ while [[ $# -gt 0 ]]; do
             DEBUG=true
             shift
             ;;
+        --headless)
+            HEADLESS=true
+            shift
+            ;;
         -*)
             echo "${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} Unknown option: $1"
             echo "Use -h or --help for usage information"
@@ -610,6 +653,9 @@ fi  # End of argument parsing skip for worker mode
 # Ensure .repos directory exists (main mode only does initialization)
 if [[ "${WORKER_MODE:-false}" != true ]]; then
 mkdir -p "$REPOS_DIR"
+
+# Emit sigil marker for headless mode (TUI integration)
+emit_sigil
 
 # Display banner
 echo ""
@@ -685,6 +731,9 @@ fi
 
 debug "Repos to process: $(echo "$repos" | wc -l) repositories"
 debug "First repo: $(echo "$repos" | head -1)"
+
+# Emit org marker for headless mode (TUI integration)
+emit_org
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PARALLELISM CONFIGURATION
@@ -1152,11 +1201,14 @@ fi
 echo ""
 if [[ "$DRYRUN" == true ]]; then
     echo "${SUCCESS_COLOR}${CHECKMARK} Guild training complete - members are ready${RESET_COLOR}"
+    emit_done "0"
     exit 0
 elif [[ $total_issues -eq 0 ]]; then
     echo "${SUCCESS_COLOR}${CHECKMARK} All repositories are clean!${RESET_COLOR}"
+    emit_done "0"
     exit 0
 else
     echo "${FAIL_COLOR}${XMARK} ${total_issues} issue(s) found across ${repos_with_issues} repository(s)${RESET_COLOR}"
+    emit_done "1"
     exit 1
 fi
