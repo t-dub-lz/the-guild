@@ -4,7 +4,7 @@ import { render, Box, Text, useApp, useStdout } from "ink";
 
 import { TabBar, TabName, useTabNavigation } from "./components/TabBar";
 import { Footer } from "./components/Footer";
-import { NewRunForm } from "./components/NewRun/NewRunForm";
+import { NewRunForm, FormState, MEMBER_LIST } from "./components/NewRun/NewRunForm";
 import { Dashboard } from "./components/Current/Dashboard";
 import { MemberCards } from "./components/Current/MemberCards";
 import { LiveLog } from "./components/Current/LiveLog";
@@ -47,6 +47,20 @@ function App() {
 
   // Form editing state (to disable global keys during text input)
   const [isEditing, setIsEditing] = useState(false);
+
+  // New Run form state (lifted here so it persists across tab switches)
+  const [formState, setFormState] = useState<FormState>(() => ({
+    org: defaults.org,
+    repoMode: "all",
+    members: Object.fromEntries(
+      MEMBER_LIST.map((m) => [m.id, defaults.members.includes(m.id)])
+    ),
+    strict: defaults.strict,
+    superStrict: defaults.superStrict,
+    scanAll: defaults.scanAll,
+    dryRun: defaults.dryRun,
+    parallelism: defaults.parallelism,
+  }));
 
   // Process state
   const process = useProcess();
@@ -180,7 +194,8 @@ function App() {
       <Box flexGrow={1} flexDirection="column">
         {activeTab === "new-run" && (
           <NewRunForm
-            defaults={defaults}
+            form={formState}
+            onFormChange={setFormState}
             onSubmit={handleNewRun}
             active={activeTab === "new-run"}
             onEditingChange={setIsEditing}

@@ -4,7 +4,7 @@ import { Box, Text } from "ink";
 import { TextField, Checkbox, RadioGroup, NumberField } from "./FormField";
 import { useKeys } from "../../hooks/useKeys";
 
-interface FormState {
+export interface FormState {
   org: string;
   repoMode: "all" | "select";
   members: Record<string, boolean>;
@@ -16,21 +16,14 @@ interface FormState {
 }
 
 interface NewRunFormProps {
-  defaults: {
-    org: string;
-    members: string[];
-    parallelism: number;
-    strict: boolean;
-    superStrict: boolean;
-    scanAll: boolean;
-    dryRun: boolean;
-  };
+  form: FormState;
+  onFormChange: (form: FormState) => void;
   onSubmit: (state: FormState) => void;
   active: boolean;
   onEditingChange?: (editing: boolean) => void;
 }
 
-const MEMBER_LIST = [
+export const MEMBER_LIST = [
   { id: "ascii-cutterman", name: "ASCII Cutterman" },
   { id: "secretary", name: "Secretary" },
   { id: "sentinel", name: "Sentinel" },
@@ -63,25 +56,21 @@ const OPTIONS_LIST = [
   { id: "dryRun", label: "Dry run" },
 ] as const;
 
-export function NewRunForm({ defaults, onSubmit, active, onEditingChange }: NewRunFormProps) {
+export function NewRunForm({ form, onFormChange, onSubmit, active, onEditingChange }: NewRunFormProps) {
   const [focusIndex, setFocusIndex] = useState(0);
   const [memberFocusIndex, setMemberFocusIndex] = useState(0);
   const [optionFocusIndex, setOptionFocusIndex] = useState(0);
   const [repoModeIndex, setRepoModeIndex] = useState(0);
   const [editingOrg, setEditingOrg] = useState(false);
 
-  const [form, setForm] = useState<FormState>(() => ({
-    org: defaults.org,
-    repoMode: "all",
-    members: Object.fromEntries(
-      MEMBER_LIST.map((m) => [m.id, defaults.members.includes(m.id)])
-    ),
-    strict: defaults.strict,
-    superStrict: defaults.superStrict,
-    scanAll: defaults.scanAll,
-    dryRun: defaults.dryRun,
-    parallelism: defaults.parallelism,
-  }));
+  // Use callback to update parent state
+  const setForm = (updater: FormState | ((prev: FormState) => FormState)) => {
+    if (typeof updater === "function") {
+      onFormChange(updater(form));
+    } else {
+      onFormChange(updater);
+    }
+  };
 
   const currentField = FIELD_ORDER[focusIndex];
 
