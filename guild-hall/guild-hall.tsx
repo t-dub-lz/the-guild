@@ -175,14 +175,15 @@ function App() {
     return "";
   };
 
-  // Placeholder member data for current run
-  const memberStatuses = [
+  // Member data for current run - filtered to only show selected members
+  const allMemberStatuses = [
     { id: "ascii-cutterman", name: "ASCII Cutterman", progress: 0, findings: 0, complete: false },
     { id: "secretary", name: "Secretary", progress: 0, findings: 0, complete: false },
     { id: "sentinel", name: "Sentinel", progress: 0, findings: 0, complete: false },
     { id: "catburglar", name: "Catburglar", progress: 0, findings: 0, complete: false },
     { id: "the-judge", name: "The Judge", progress: 0, findings: 0, complete: false },
   ];
+  const memberStatuses = allMemberStatuses.filter((m) => formState.members[m.id]);
 
   // Placeholder member summaries for history detail
   const memberSummaries = [
