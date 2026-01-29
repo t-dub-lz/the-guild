@@ -5,7 +5,7 @@ import { Box, Text } from "ink";
 // Strip ALL escape sequences - ANSI colors, cursor movements, etc.
 const ESCAPE_REGEX = /\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\x1b[()][AB012]|\x1b[>=]?/g;
 // Also strip carriage returns and other control characters
-const CONTROL_REGEX = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
+const CONTROL_REGEX = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\r]/g;
 
 function sanitizeLine(str: string): string {
   return str
@@ -20,50 +20,56 @@ function truncateLine(str: string, maxWidth: number): string {
   return str.slice(0, maxWidth - 1) + "…";
 }
 
-interface LiveLogProps {
-  lines: string[];
-  maxLines?: number;
-  maxWidth?: number;
-  maxHeight?: number;
+// Get color for a line based on content
+function getLineColor(line: string): string | undefined {
+  if (line.includes("✓") || line.includes("clean")) return "green";
+  if (line.includes("✗") || line.includes("issue") || line.includes("FINDING")) return "red";
+  if (line.startsWith("[REPO:") || line.startsWith("[SIGIL:")) return "cyan";
+  return undefined;
 }
 
-export function LiveLog({ lines, maxLines = 15, maxWidth = 60, maxHeight }: LiveLogProps) {
-  // Sanitize, truncate, and take last N lines
-  const displayLines = lines
-    .slice(-maxLines)
-    .map((line) => truncateLine(sanitizeLine(line), maxWidth))
-    .filter((line) => line.length > 0); // Remove empty lines
+interface LiveLogProps {
+  lines: string[];
+  height: number;
+  width: number;
+}
 
+export function LiveLog({ lines, height, width }: LiveLogProps) {
+  // Calculate usable dimensions (account for border)
+  const usableHeight = Math.max(1, height - 1);
+  const usableWidth = Math.max(10, width - 3); // border + padding
+
+  // Process lines: sanitize, truncate, filter empty
+  const processedLines = lines
+    .map((line) => truncateLine(sanitizeLine(line), usableWidth))
+    .filter((line) => line.length > 0);
+
+  // Take exactly the last N lines that fit, pad with empty if needed
+  const displayLines: string[] = [];
+  const startIdx = Math.max(0, processedLines.length - usableHeight);
+  for (let i = 0; i < usableHeight; i++) {
+    const lineIdx = startIdx + i;
+    displayLines.push(lineIdx < processedLines.length ? processedLines[lineIdx] : "");
+  }
+
+  // Render as a single pre-formatted text block to avoid flex issues
   return (
     <Box
       flexDirection="column"
-      width="50%"
-      height={maxHeight}
-      overflow="hidden"
+      width={width}
+      height={height}
       borderStyle="single"
       borderRight
       borderTop={false}
       borderBottom={false}
       borderLeft={false}
-      paddingX={1}
+      paddingLeft={1}
     >
-      {displayLines.map((line, i) => {
-        // Color code based on content
-        let color: string | undefined;
-        if (line.includes("✓") || line.includes("clean")) {
-          color = "green";
-        } else if (line.includes("✗") || line.includes("issue") || line.includes("FINDING")) {
-          color = "red";
-        } else if (line.startsWith("[REPO:") || line.startsWith("[SIGIL:")) {
-          color = "cyan";
-        }
-
-        return (
-          <Text key={i} color={color}>
-            {line}
-          </Text>
-        );
-      })}
+      {displayLines.map((line, i) => (
+        <Text key={i} color={getLineColor(line)}>
+          {line || " "}
+        </Text>
+      ))}
     </Box>
   );
 }

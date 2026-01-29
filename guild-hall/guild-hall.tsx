@@ -224,12 +224,11 @@ function App() {
                   filesScanned={0}
                   issueCount={0}
                 />
-                <Box flexGrow={1} overflow="hidden">
+                <Box flexDirection="row">
                   <LiveLog
                     lines={process.output}
-                    maxWidth={Math.floor(termSize.cols / 2) - 4}
-                    maxHeight={termSize.rows - 8}
-                    maxLines={termSize.rows - 10}
+                    width={Math.floor(termSize.cols / 2)}
+                    height={termSize.rows - 7}
                   />
                   <MemberCards
                     members={memberStatuses}
