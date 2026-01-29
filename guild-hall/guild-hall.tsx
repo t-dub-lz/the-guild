@@ -225,7 +225,7 @@ function App() {
                   issueCount={0}
                 />
                 <Box flexGrow={1} overflow="hidden">
-                  <LiveLog lines={process.output} />
+                  <LiveLog lines={process.output} maxWidth={Math.floor(termSize.cols / 2) - 4} />
                   <MemberCards
                     members={memberStatuses}
                     selectedIndex={0}
