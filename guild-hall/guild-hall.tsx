@@ -106,6 +106,13 @@ function App() {
     }
   }, activeTab !== "new-run");
 
+  // Current tab - cancel scan with 'c'
+  useKeys((key) => {
+    if (key === "c" && process.running) {
+      process.stop();
+    }
+  }, activeTab === "current");
+
   // History navigation
   useKeys((key) => {
     if (selectedRun) {
@@ -155,7 +162,10 @@ function App() {
     if (activeTab === "new-run") {
       return "↑/k ↓/j:fields  ←/h →/l:options  Space:toggle  i/Enter:edit  Tab:tabs  q:quit";
     } else if (activeTab === "current") {
-      return "↑/k ↓/j:select member  Enter:view findings  Tab:switch tabs  q:quit";
+      if (process.running) {
+        return "↑/k ↓/j:select member  c:cancel scan  Tab:switch tabs  q:quit";
+      }
+      return "Tab:switch tabs  q:quit";
     } else if (activeTab === "history") {
       if (selectedRun) {
         return "↑/k ↓/j:select  Enter:view findings  Esc:back  Tab:switch tabs  q:quit";
