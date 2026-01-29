@@ -14,6 +14,8 @@ export function LiveLog({ lines, maxLines = 20 }: LiveLogProps) {
     <Box
       flexDirection="column"
       width="50%"
+      flexGrow={1}
+      flexShrink={1}
       overflow="hidden"
       borderStyle="single"
       borderRight

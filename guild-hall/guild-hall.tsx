@@ -224,7 +224,7 @@ function App() {
                   filesScanned={0}
                   issueCount={0}
                 />
-                <Box flexGrow={1}>
+                <Box flexGrow={1} overflow="hidden">
                   <LiveLog lines={process.output} />
                   <MemberCards
                     members={memberStatuses}
