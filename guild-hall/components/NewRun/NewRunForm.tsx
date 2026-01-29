@@ -7,6 +7,7 @@ import { useKeys } from "../../hooks/useKeys";
 export interface FormState {
   org: string;
   repoMode: "all" | "select";
+  repos: string; // Comma-separated repo names (without org prefix)
   members: Record<string, boolean>;
   strict: boolean;
   superStrict: boolean;
@@ -54,19 +55,19 @@ export const MEMBER_LIST = [
 type FieldId =
   | "org"
   | "repoMode"
+  | "repos"
   | "members"
   | "options"
   | "parallelism"
   | "submit";
 
-const FIELD_ORDER: FieldId[] = [
-  "org",
-  "repoMode",
-  "members",
-  "options",
-  "parallelism",
-  "submit",
-];
+// Field order changes based on repoMode - repos field only shown when selecting specific repos
+const getFieldOrder = (repoMode: "all" | "select"): FieldId[] => {
+  if (repoMode === "select") {
+    return ["org", "repoMode", "repos", "members", "options", "parallelism", "submit"];
+  }
+  return ["org", "repoMode", "members", "options", "parallelism", "submit"];
+};
 
 // Options are navigated horizontally as a group
 const OPTIONS_LIST = [
@@ -82,6 +83,10 @@ export function NewRunForm({ form, onFormChange, onSubmit, active, onEditingChan
   const [optionFocusIndex, setOptionFocusIndex] = useState(0);
   const [repoModeIndex, setRepoModeIndex] = useState(0);
   const [editingOrg, setEditingOrg] = useState(false);
+  const [editingRepos, setEditingRepos] = useState(false);
+
+  // Get field order based on current repo mode
+  const FIELD_ORDER = getFieldOrder(form.repoMode);
 
   // Use callback to update parent state
   const setForm = (updater: FormState | ((prev: FormState) => FormState)) => {
@@ -96,8 +101,8 @@ export function NewRunForm({ form, onFormChange, onSubmit, active, onEditingChan
 
   // Notify parent when editing state changes
   useEffect(() => {
-    onEditingChange?.(editingOrg);
-  }, [editingOrg, onEditingChange]);
+    onEditingChange?.(editingOrg || editingRepos);
+  }, [editingOrg, editingRepos, onEditingChange]);
 
   useKeys(
     (key) => {
@@ -156,6 +161,8 @@ export function NewRunForm({ form, onFormChange, onSubmit, active, onEditingChan
           onSubmit(form);
         } else if (currentField === "org") {
           setEditingOrg(true);
+        } else if (currentField === "repos") {
+          setEditingRepos(true);
         } else if (currentField === "repoMode") {
           // Select the focused repo mode option
           const newMode = repoModeIndex === 0 ? "all" : "select";
@@ -166,10 +173,12 @@ export function NewRunForm({ form, onFormChange, onSubmit, active, onEditingChan
       else if (key === "i") {
         if (currentField === "org") {
           setEditingOrg(true);
+        } else if (currentField === "repos") {
+          setEditingRepos(true);
         }
       }
     },
-    active && !editingOrg
+    active && !editingOrg && !editingRepos
   );
 
   return (
@@ -196,6 +205,22 @@ export function NewRunForm({ form, onFormChange, onSubmit, active, onEditingChan
         />
         {currentField === "repoMode" && <Text dimColor> (Space to toggle)</Text>}
       </Box>
+
+      {form.repoMode === "select" && (
+        <Box marginTop={1} flexDirection="column">
+          <TextField
+            label="Repos"
+            value={form.repos}
+            focused={currentField === "repos"}
+            editing={editingRepos}
+            onChange={(v) => setForm((f) => ({ ...f, repos: v }))}
+            onEditComplete={() => setEditingRepos(false)}
+          />
+          <Text dimColor>
+            Comma-separated repo names without org prefix (e.g., iq-flow, lz-sdk)
+          </Text>
+        </Box>
+      )}
 
       <Box marginTop={1} flexDirection="column">
         <Text>Guild Members:</Text>

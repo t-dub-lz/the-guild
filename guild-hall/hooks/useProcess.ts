@@ -12,6 +12,7 @@ export interface ProcessState {
 
 export interface RunOptions {
   org: string;
+  repos?: string; // Comma-separated repo names (without org prefix)
   members: string[];
   parallelism: number;
   strict: boolean;
@@ -79,6 +80,19 @@ export function useProcess(onLine?: (line: string) => void) {
     const excluded = allMembers.filter((m) => !options.members.includes(m));
     if (excluded.length > 0) {
       args.push("-x", excluded.join(","));
+    }
+
+    // If specific repos are specified, prepend org to each and pass as positional arg
+    if (options.repos && options.repos.trim()) {
+      const repoList = options.repos
+        .split(",")
+        .map((r) => r.trim())
+        .filter((r) => r.length > 0)
+        .map((r) => `${options.org}/${r}`)
+        .join(",");
+      if (repoList) {
+        args.push(repoList);
+      }
     }
 
     outputRef.current = [];

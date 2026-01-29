@@ -52,6 +52,7 @@ function App() {
   const [formState, setFormState] = useState<FormState>(() => ({
     org: defaults.org,
     repoMode: "all",
+    repos: "",
     members: Object.fromEntries(
       MEMBER_LIST.map((m) => [m.id, defaults.members.includes(m.id)])
     ),
@@ -144,6 +145,7 @@ function App() {
   const handleNewRun = (formState: any) => {
     const options: RunOptions = {
       org: formState.org,
+      repos: formState.repoMode === "select" ? formState.repos : undefined,
       members: Object.entries(formState.members)
         .filter(([, v]) => v)
         .map(([k]) => k),
