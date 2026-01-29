@@ -43,7 +43,10 @@ export function RunList({ runs, selectedIndex, focused }: RunListProps) {
   return (
     <Box flexDirection="column" padding={1}>
       <Text bold>Recent Conclaves</Text>
-      <Text dimColor>{"─".repeat(60)}</Text>
+      <Text dimColor>
+        Members: AC=ASCII Cutterman  SE=Secretary  SN=Sentinel  CB=Catburglar  TJ=The Judge
+      </Text>
+      <Text dimColor>{"─".repeat(85)}</Text>
 
       {visibleRuns.length === 0 ? (
         <Text dimColor>No runs found</Text>
