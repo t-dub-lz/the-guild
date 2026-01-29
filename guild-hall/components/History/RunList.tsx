@@ -3,6 +3,30 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { ConclaveRun } from "../../hooks/useDatabase";
 
+// Short codes for each guild member
+const MEMBER_CODES: Record<string, string> = {
+  "ascii-cutterman": "AC",
+  "secretary": "SE",
+  "sentinel": "SN",
+  "catburglar": "CB",
+  "the-judge": "TJ",
+};
+
+// Parse members JSON and return short codes
+function formatMembers(membersJson: string | null): string {
+  if (!membersJson) return "─────";
+  try {
+    const members = JSON.parse(membersJson) as string[];
+    // Show codes for included members, dash for excluded
+    const allMembers = ["ascii-cutterman", "secretary", "sentinel", "catburglar", "the-judge"];
+    return allMembers
+      .map((m) => (members.includes(m) ? MEMBER_CODES[m] : "──"))
+      .join(" ");
+  } catch {
+    return "─────";
+  }
+}
+
 interface RunListProps {
   runs: ConclaveRun[];
   selectedIndex: number;
@@ -49,6 +73,8 @@ export function RunList({ runs, selectedIndex, focused }: RunListProps) {
               <Text color={hasIssues ? "red" : "green"}>
                 {hasIssues ? "✗" : "✓"}
               </Text>
+              <Text>{"  "}</Text>
+              <Text dimColor>{formatMembers(run.members)}</Text>
             </Box>
           );
         })
