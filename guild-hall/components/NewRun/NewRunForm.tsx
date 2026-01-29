@@ -24,11 +24,31 @@ interface NewRunFormProps {
 }
 
 export const MEMBER_LIST = [
-  { id: "ascii-cutterman", name: "ASCII Cutterman" },
-  { id: "secretary", name: "Secretary" },
-  { id: "sentinel", name: "Sentinel" },
-  { id: "catburglar", name: "Catburglar" },
-  { id: "the-judge", name: "The Judge" },
+  {
+    id: "ascii-cutterman",
+    name: "ASCII Cutterman",
+    description: "Detects Unicode smuggling, invisible chars, and homoglyphs",
+  },
+  {
+    id: "secretary",
+    name: "The Secretary",
+    description: "Flags files exceeding 10,000 lines of code",
+  },
+  {
+    id: "sentinel",
+    name: "Sentinel",
+    description: "Runs Snyk vulnerability scans (SCA and optionally SAST) on repositories",
+  },
+  {
+    id: "catburglar",
+    name: "Catburglar",
+    description: "Analyzes GitHub PRs for Snyk check failures",
+  },
+  {
+    id: "the-judge",
+    name: "The Judge",
+    description: "Analyzes AI agent instruction files for security, verbosity, and clarity",
+  },
 ];
 
 type FieldId =
@@ -189,6 +209,11 @@ export function NewRunForm({ form, onFormChange, onSubmit, active, onEditingChan
             />
           ))}
         </Box>
+        {currentField === "members" && (
+          <Text dimColor italic>
+            {MEMBER_LIST[memberFocusIndex].description}
+          </Text>
+        )}
       </Box>
 
       <Box marginTop={1} flexDirection="column">
