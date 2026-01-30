@@ -193,16 +193,14 @@ generate_report() {
     total_failing=$(echo "$scans_json" | jq '[.[].failing_prs] | add // 0' 2>/dev/null || echo "0")
     total_snyk=$(echo "$scans_json" | jq '[.[].snyk_blocked] | add // 0' 2>/dev/null || echo "0")
 
-    # Output summary
+    # Output summary using guild table utilities
     printf "\n"
-    printf "${BOLD}╔═══════════════════════════════════════════════════╗${NC}\n"
-    printf "${BOLD}║         Snyk PR Check Analysis Summary            ║${NC}\n"
-    printf "${BOLD}╠═══════════════════════════════════════════════════╣${NC}\n"
-    printf "║ Repositories analyzed:     ${BLUE}%5d${NC}                  ║\n" "$total_repos"
-    printf "║ Total open PRs:            ${BLUE}%5d${NC}                  ║\n" "$total_prs"
-    printf "║ PRs with any failing check:${YELLOW}%5d${NC}                  ║\n" "$total_failing"
-    printf "║ PRs blocked by Snyk:       ${RED}%5d${NC}                  ║\n" "$total_snyk"
-    printf "${BOLD}╚═══════════════════════════════════════════════════╝${NC}\n"
+    guild_table_header "Snyk PR Check Analysis Summary"
+    guild_table_row "Repositories analyzed:" "$total_repos" "$BLUE"
+    guild_table_row "Total open PRs:" "$total_prs" "$BLUE"
+    guild_table_row "PRs with any failing check:" "$total_failing" "$YELLOW"
+    guild_table_row "PRs blocked by Snyk:" "$total_snyk" "$RED"
+    guild_table_footer
 
     if [[ "$total_snyk" -eq 0 ]]; then
         printf "\n${GREEN}${CHECKMARK} All repositories clean - no Snyk-blocked PRs${NC}\n"

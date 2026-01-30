@@ -1185,17 +1185,18 @@ fi
 # Show per-tool stats (skip in dryrun mode)
 if [[ "$DRYRUN" != true ]]; then
     echo ""
-    echo "${CYAN_COLOR}Indictments Of The Conclave:${RESET_COLOR}"
+    guild_table_header "Indictments Of The Conclave"
     for tool in "${tools_list[@]}"; do
         tool_display_name=$(get_tool_config "$tool" "name")
         [[ -z "$tool_display_name" ]] && tool_display_name="$tool"
         count=${tool_stats["$tool"]}
         if [[ $count -eq 0 ]]; then
-            echo "  ${SUCCESS_COLOR}${CHECKMARK}${RESET_COLOR} ${tool_display_name}: ${BLUE_COLOR}0${RESET_COLOR} issues"
+            guild_table_status_row "${tool_display_name}:" "0" "true"
         else
-            echo "  ${FAIL_COLOR}${XMARK}${RESET_COLOR} ${tool_display_name}: ${BLUE_COLOR}${count}${RESET_COLOR} issues"
+            guild_table_status_row "${tool_display_name}:" "${count}" "false"
         fi
     done
+    guild_table_footer
 fi
 
 echo ""

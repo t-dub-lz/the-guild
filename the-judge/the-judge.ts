@@ -5,6 +5,7 @@ import { argv, exit, stderr, stdout, env } from "process";
 import { join, basename, dirname } from "path";
 import { execSync } from "child_process";
 import OpenAI from "openai";
+import { colors, symbols, table } from "../lib/guild-utils";
 
 const TOOL_NAME = "the-judge";
 
@@ -555,22 +556,23 @@ function generateReport(sigil: string): string {
     const totalLow = findings.filter(f => f.severity === 'low').length;
     const totalIssues = findings.length;
 
-    let report = `  ${GAVEL} Security Analysis Complete\n`;
-    report += `  ─────────────────────────────────────\n`;
-    report += `  Files Analyzed: ${BLUE_COLOR}${totalFiles}${RESET_COLOR}\n`;
-    report += `  Repositories: ${BLUE_COLOR}${reposAnalyzed.size}${RESET_COLOR}\n`;
-    report += `\n`;
-    report += `  ${SUCCESS_COLOR}${CHECKMARK} Clean:${RESET_COLOR} ${filesClean} files\n`;
-    report += `  ${FAIL_COLOR}${XMARK} Issues:${RESET_COLOR} ${filesWithIssues} files (${totalIssues} total findings)\n`;
+    let report = '\n';
+    report += table.header(`${symbols.GAVEL} AI Security Analysis Summary`);
+    report += table.row('Files analyzed:', totalFiles, colors.BLUE);
+    report += table.row('Repositories:', reposAnalyzed.size, colors.BLUE);
+    report += table.divider();
+    report += table.statusRow('Clean:', filesClean, true);
+    report += table.statusRow('With issues:', filesWithIssues, filesWithIssues === 0);
     if (filesCritical > 0) {
-      report += `  ${CRITICAL_BG} CRITICAL ${RESET_COLOR}: ${filesCritical} files need immediate attention\n`;
+      report += table.row(`${colors.CRITICAL_BG} CRITICAL ${colors.NC}:`, filesCritical, colors.FAIL);
     }
-    report += `\n`;
-    report += `  Severity Breakdown:\n`;
-    report += `    ${CRITICAL_BG} CRITICAL ${RESET_COLOR}: ${totalCritical}\n`;
-    report += `    ${FAIL_COLOR}High${RESET_COLOR}: ${totalHigh}\n`;
-    report += `    ${YELLOW_COLOR}Medium${RESET_COLOR}: ${totalMedium}\n`;
-    report += `    ${CYAN_COLOR}Low${RESET_COLOR}: ${totalLow}`;
+    report += table.divider();
+    report += table.section('Severity Breakdown:');
+    report += table.row('  Critical:', totalCritical, colors.FAIL);
+    report += table.row('  High:', totalHigh, colors.YELLOW);
+    report += table.row('  Medium:', totalMedium, colors.BLUE);
+    report += table.row('  Low:', totalLow);
+    report += table.footer().trimEnd();
 
     return report;
   } catch {

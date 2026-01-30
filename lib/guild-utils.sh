@@ -18,6 +18,7 @@
 #   - guild_strip_jsonc_comments() - JSONC parsing
 #   - Spinner animation functions
 #   - guild_make_separator() - separator line generation
+#   - Table formatting (guild_table_header, guild_table_row, etc.)
 #
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -405,5 +406,128 @@ guild_show_spinner() {
 guild_make_separator() {
     local len="$1"
     local char="${2:-═}"
-    printf '%*s' "$len" '' | tr ' ' "$char"
+    local result=""
+    for ((i=0; i<len; i++)); do
+        result+="$char"
+    done
+    printf '%s' "$result"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TABLE FORMATTING - Conclave-style output tables
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Standard table width (53 chars inner content, matching catburglar)
+GUILD_TABLE_WIDTH=53
+
+# Box-drawing characters
+GUILD_BOX_TL='╔'  # Top-left corner
+GUILD_BOX_TR='╗'  # Top-right corner
+GUILD_BOX_BL='╚'  # Bottom-left corner
+GUILD_BOX_BR='╝'  # Bottom-right corner
+GUILD_BOX_H='═'   # Horizontal line
+GUILD_BOX_V='║'   # Vertical line
+GUILD_BOX_ML='╠'  # Middle-left (divider)
+GUILD_BOX_MR='╣'  # Middle-right (divider)
+
+# Print table top border with title
+# Usage: guild_table_header "My Summary Title"
+guild_table_header() {
+    local title="$1"
+    local width=${2:-$GUILD_TABLE_WIDTH}
+    local border=$(guild_make_separator "$width" "$GUILD_BOX_H")
+    local title_len=${#title}
+    local left_pad=$(( (width - title_len) / 2 ))
+    local right_pad=$(( width - title_len - left_pad ))
+
+    printf "${BOLD}${GUILD_BOX_TL}${border}${GUILD_BOX_TR}${NC}\n"
+    printf "${BOLD}${GUILD_BOX_V}%*s%s%*s${GUILD_BOX_V}${NC}\n" "$left_pad" "" "$title" "$right_pad" ""
+    printf "${BOLD}${GUILD_BOX_ML}${border}${GUILD_BOX_MR}${NC}\n"
+}
+
+# Print table section divider
+# Usage: guild_table_divider
+guild_table_divider() {
+    local width=${1:-$GUILD_TABLE_WIDTH}
+    local border=$(guild_make_separator "$width" "$GUILD_BOX_H")
+    printf "${BOLD}${GUILD_BOX_ML}${border}${GUILD_BOX_MR}${NC}\n"
+}
+
+# Print table bottom border
+# Usage: guild_table_footer
+guild_table_footer() {
+    local width=${1:-$GUILD_TABLE_WIDTH}
+    local border=$(guild_make_separator "$width" "$GUILD_BOX_H")
+    printf "${BOLD}${GUILD_BOX_BL}${border}${GUILD_BOX_BR}${NC}\n"
+}
+
+# Print a table row with label and value (right-aligned value, optionally colored)
+# Usage: guild_table_row "Label text:" "42" "$BLUE"
+# Usage: guild_table_row "Label text:" "42"  # no color
+guild_table_row() {
+    local label="$1"
+    local value="$2"
+    local color="${3:-}"
+    local width=${4:-$GUILD_TABLE_WIDTH}
+
+    # Format: "║ label                    value ║"
+    # Inner content = width chars, with 1 space after ║ and 1 before ║
+    local inner=$((width - 2))  # Account for leading/trailing space
+    local value_width=8         # Fixed width for value column
+    local label_max=$((inner - value_width - 1))  # -1 for space between label and value
+
+    # Truncate label if needed
+    local display_label="${label:0:$label_max}"
+    local label_len=${#display_label}
+    local padding=$((label_max - label_len))
+
+    # Build the line: space + label + padding + space + value (right-aligned in 8 chars) + space
+    if [[ -n "$color" ]]; then
+        printf "${GUILD_BOX_V} %s%*s ${color}%${value_width}s${NC} ${GUILD_BOX_V}\n" \
+            "$display_label" "$padding" "" "$value"
+    else
+        printf "${GUILD_BOX_V} %s%*s %${value_width}s ${GUILD_BOX_V}\n" \
+            "$display_label" "$padding" "" "$value"
+    fi
+}
+
+# Print a table row with label and status (checkmark/X with color)
+# Usage: guild_table_status_row "Files clean:" 10 true   # green checkmark
+# Usage: guild_table_status_row "Files with issues:" 5 false  # red X
+guild_table_status_row() {
+    local label="$1"
+    local value="$2"
+    local is_good="${3:-true}"
+    local width=${4:-$GUILD_TABLE_WIDTH}
+
+    # Format: "║ ✓ label                 value ║"
+    local inner=$((width - 2))
+    local value_width=8
+    local symbol_width=2  # Symbol + space
+    local label_max=$((inner - value_width - symbol_width - 1))
+
+    local display_label="${label:0:$label_max}"
+    local label_len=${#display_label}
+    local padding=$((label_max - label_len))
+
+    if [[ "$is_good" == true ]]; then
+        printf "${GUILD_BOX_V} ${GREEN}${CHECKMARK}${NC} %s%*s %${value_width}s ${GUILD_BOX_V}\n" \
+            "$display_label" "$padding" "" "$value"
+    else
+        printf "${GUILD_BOX_V} ${RED}${XMARK}${NC} %s%*s ${RED}%${value_width}s${NC} ${GUILD_BOX_V}\n" \
+            "$display_label" "$padding" "" "$value"
+    fi
+}
+
+# Print a section header row (cyan label, no value)
+# Usage: guild_table_section "SCA Findings:"
+guild_table_section() {
+    local label="$1"
+    local width=${2:-$GUILD_TABLE_WIDTH}
+
+    local inner=$((width - 2))
+    local label_len=${#label}
+    local padding=$((inner - label_len))
+
+    printf "${GUILD_BOX_V} ${CYAN}%s${NC}%*s ${GUILD_BOX_V}\n" "$label" "$padding" ""
 }

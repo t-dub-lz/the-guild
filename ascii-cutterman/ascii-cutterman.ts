@@ -5,6 +5,7 @@ import { argv, exit, stderr, stdout } from "process";
 import { isatty } from "tty";
 import { join, dirname } from "path";
 import { execSync } from "child_process";
+import { colors, symbols, table } from "../lib/guild-utils";
 
 const TOOL_NAME = "ascii-cutterman";
 
@@ -1066,10 +1067,14 @@ function generateReport(sigil: string): string {
 
     const avgFilesPerRepo = Math.round(totalFiles / totalRepos);
 
-    let report = `  Repos analyzed: ${totalRepos}\n`;
-    report += `  Total files scanned: ${totalFiles}\n`;
-    report += `  Average files per repo: ${avgFilesPerRepo}\n`;
-    report += `  Files with smuggling detected: ${totalSmuggling}`;
+    let report = '\n';
+    report += table.header('Unicode Smuggling Analysis Summary');
+    report += table.row('Repositories analyzed:', totalRepos, colors.BLUE);
+    report += table.row('Total files scanned:', totalFiles, colors.BLUE);
+    report += table.row('Average files per repo:', avgFilesPerRepo, colors.BLUE);
+    report += table.divider();
+    report += table.statusRow('Files with smuggling:', totalSmuggling, totalSmuggling === 0);
+    report += table.footer().trimEnd();
 
     return report;
   } catch {

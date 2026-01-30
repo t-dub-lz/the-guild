@@ -27,6 +27,22 @@ TOOL_NAME="secretary"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GUILD_DB="${SCRIPT_DIR}/../lib/guild-db.ts"
 
+# Source guild utilities for colors and symbols
+if [[ -f "${SCRIPT_DIR}/../lib/guild-utils.sh" ]]; then
+    source "${SCRIPT_DIR}/../lib/guild-utils.sh"
+else
+    # Fallback color definitions if guild-utils not found
+    RED=$'\033[0;31m'
+    GREEN=$'\033[0;32m'
+    YELLOW=$'\033[0;33m'
+    BLUE=$'\033[0;34m'
+    CYAN=$'\033[0;36m'
+    BOLD=$'\033[1m'
+    NC=$'\033[0m'
+    CHECKMARK='✓'
+    XMARK='✗'
+fi
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -136,10 +152,22 @@ if [[ "$REPORT_MODE" == true ]]; then
         if [[ $total_repos -gt 0 && $total_files -gt 0 ]]; then
             avg_files=$((total_files / total_repos))
             avg_size=$((total_size / total_files))
+            # Format size for display (KB if over 1000)
+            if [[ $avg_size -gt 1000 ]]; then
+                avg_size_display="$((avg_size / 1024)) KB"
+            else
+                avg_size_display="${avg_size} B"
+            fi
 
-            echo "  Average files per repo: ${avg_files}"
-            echo "  Average file size: ${avg_size} bytes"
-            echo "  Files over ${LINE_THRESHOLD} lines: ${total_over}"
+            printf "\n"
+            guild_table_header "File Statistics Summary"
+            guild_table_row "Repositories analyzed:" "$total_repos" "$BLUE"
+            guild_table_row "Total files scanned:" "$total_files" "$BLUE"
+            guild_table_row "Average files per repo:" "$avg_files" "$BLUE"
+            guild_table_row "Average file size:" "$avg_size_display" "$BLUE"
+            guild_table_divider
+            guild_table_status_row "Over ${LINE_THRESHOLD} lines:" "$total_over" "$([[ $total_over -eq 0 ]] && echo true || echo false)"
+            guild_table_footer
         fi
     fi
 

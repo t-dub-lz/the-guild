@@ -353,26 +353,24 @@ generate_report() {
     sast_medium=$(echo "$scans_json" | jq '[.[].sast_medium] | add // 0' 2>/dev/null || echo "0")
     sast_low=$(echo "$scans_json" | jq '[.[].sast_low] | add // 0' 2>/dev/null || echo "0")
 
-    # Output summary
+    # Output summary using guild table utilities
     printf "\n"
-    printf "${BOLD}+===================================================+${NC}\n"
-    printf "${BOLD}|       Snyk Vulnerability Scan Summary             |${NC}\n"
-    printf "${BOLD}+===================================================+${NC}\n"
-    printf "| Repositories scanned:        ${BLUE}%5d${NC}                |\n" "$total_repos"
-    printf "| Repos with vulnerabilities:  ${YELLOW}%5d${NC}                |\n" "$repos_with_vulns"
-    printf "+---------------------------------------------------+\n"
-    printf "| ${CYAN}SCA (Dependency) Findings:${NC}                        |\n"
-    printf "|   Critical:                  ${RED}%5d${NC}                |\n" "$sca_critical"
-    printf "|   High:                      ${YELLOW}%5d${NC}                |\n" "$sca_high"
-    printf "|   Medium:                    ${BLUE}%5d${NC}                |\n" "$sca_medium"
-    printf "|   Low:                       %5d                |\n" "$sca_low"
-    printf "+---------------------------------------------------+\n"
-    printf "| ${CYAN}SAST (Code) Findings:${NC}                             |\n"
-    printf "|   Critical:                  ${RED}%5d${NC}                |\n" "$sast_critical"
-    printf "|   High:                      ${YELLOW}%5d${NC}                |\n" "$sast_high"
-    printf "|   Medium:                    ${BLUE}%5d${NC}                |\n" "$sast_medium"
-    printf "|   Low:                       %5d                |\n" "$sast_low"
-    printf "${BOLD}+===================================================+${NC}\n"
+    guild_table_header "Snyk Vulnerability Scan Summary"
+    guild_table_row "Repositories scanned:" "$total_repos" "$BLUE"
+    guild_table_row "Repos with vulnerabilities:" "$repos_with_vulns" "$YELLOW"
+    guild_table_divider
+    guild_table_section "SCA (Dependency) Findings:"
+    guild_table_row "  Critical:" "$sca_critical" "$RED"
+    guild_table_row "  High:" "$sca_high" "$YELLOW"
+    guild_table_row "  Medium:" "$sca_medium" "$BLUE"
+    guild_table_row "  Low:" "$sca_low"
+    guild_table_divider
+    guild_table_section "SAST (Code) Findings:"
+    guild_table_row "  Critical:" "$sast_critical" "$RED"
+    guild_table_row "  High:" "$sast_high" "$YELLOW"
+    guild_table_row "  Medium:" "$sast_medium" "$BLUE"
+    guild_table_row "  Low:" "$sast_low"
+    guild_table_footer
 
     # Show repos with critical issues
     local critical_repos
