@@ -215,17 +215,27 @@ parse_sast_results() {
     local critical=0 high=0 medium=0 low=0
     local findings="[]"
 
-    # Count by severity
+    # Count by severity (mutually exclusive categories matching findings mapping)
+    # Critical: error level with high priority score
     critical=$(jq '[.runs[]?.results[]? | select(.level == "error" and .properties.priorityScore >= 900)] | length' "$json_file" 2>/dev/null || echo 0)
-    high=$(jq '[.runs[]?.results[]? | select(.level == "error" or .level == "warning")] | length' "$json_file" 2>/dev/null || echo 0)
-    medium=$(jq '[.runs[]?.results[]? | select(.level == "note")] | length' "$json_file" 2>/dev/null || echo 0)
+    # High: error level that's NOT critical (priorityScore < 900 or missing)
+    high=$(jq '[.runs[]?.results[]? | select(.level == "error" and (.properties.priorityScore < 900 or .properties.priorityScore == null))] | length' "$json_file" 2>/dev/null || echo 0)
+    # Medium: warning level (was incorrectly grouped with high)
+    medium=$(jq '[.runs[]?.results[]? | select(.level == "warning" or .level == "note")] | length' "$json_file" 2>/dev/null || echo 0)
+    # Low: none/null or any other level
     low=$(jq '[.runs[]?.results[]? | select(.level == "none" or .level == null)] | length' "$json_file" 2>/dev/null || echo 0)
 
-    # Extract findings
+    # Extract findings (severity mapping matches counting logic above)
     findings=$(jq -c '[.runs[]?.results[]? | {
         vuln_id: (.ruleId // "unknown"),
         source: "sast",
-        severity: (if .level == "error" then "high" elif .level == "warning" then "medium" else "low" end),
+        severity: (
+            if .level == "error" and (.properties.priorityScore // 0) >= 900 then "critical"
+            elif .level == "error" then "high"
+            elif .level == "warning" or .level == "note" then "medium"
+            else "low"
+            end
+        ),
         title: (.message.text // .ruleId // "Code issue"),
         file_path: (.locations[0]?.physicalLocation?.artifactLocation?.uri // null),
         line_number: (.locations[0]?.physicalLocation?.region?.startLine // null),
