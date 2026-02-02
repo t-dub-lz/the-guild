@@ -274,6 +274,13 @@ analyze_single_repo() {
     # Calculate total vulnerabilities
     local total_vulns=$((sca_critical + sca_high + sca_medium + sca_low + sast_critical + sast_high + sast_medium + sast_low))
 
+    # Also mark as having vulns if we found any counted issues
+    # Trigger: Snyk exit code doesn't match parsed findings (e.g., code quality issues)
+    # Ensures consistency between rolling output and final summary
+    if [[ $total_vulns -gt 0 ]]; then
+        has_vulns=true
+    fi
+
     # Combine findings (use jq to merge arrays)
     local all_findings
     all_findings=$(echo "$sca_findings $sast_findings" | jq -sc 'add // []' 2>/dev/null || echo "[]")
