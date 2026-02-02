@@ -373,9 +373,9 @@ guild_strip_jsonc_comments() {
 GUILD_SPINNER_FRAMES=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
 GUILD_SPINNER_INDEX=0
 
-# Clear spinner line
+# Clear spinner line (outputs to stderr to avoid interfering with stdout data)
 guild_clear_spinner() {
-    printf "\r\033[K"
+    printf "\r\033[K" >&2
 }
 
 # Advance spinner to next frame
@@ -390,9 +390,10 @@ guild_get_spinner() {
 
 # Show spinner with message (call in a loop)
 # Usage: guild_show_spinner "Loading..."
+# Note: Outputs to stderr to avoid interfering with stdout data in command substitutions
 guild_show_spinner() {
     local message="$1"
-    printf "\r${NEON_GREEN}%s${RESET_COLOR} %s" "${GUILD_SPINNER_FRAMES[$GUILD_SPINNER_INDEX]}" "$message"
+    printf "\r${NEON_GREEN}%s${RESET_COLOR} %s" "${GUILD_SPINNER_FRAMES[$GUILD_SPINNER_INDEX]}" "$message" >&2
     guild_advance_spinner
 }
 
