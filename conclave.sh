@@ -904,7 +904,13 @@ process_single_repo() {
             wait "$tool_pid" || true
             guild_clear_spinner
 
+            # Small delay to ensure file system sync (prevents race condition)
+            sleep 0.1
+
             exit_code=$(cat "$temp_results" 2>/dev/null || echo "2")
+            # Handle empty file (timing issue) - treat as error, not clean
+            # Bash treats empty string as 0 in -eq comparison, which would falsely show "Clean"
+            [[ -z "$exit_code" ]] && exit_code="2"
             rm -f "$temp_results"
 
             # Handle timeout case (exit code 124 from timeout command)
