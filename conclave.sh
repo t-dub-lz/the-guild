@@ -14,6 +14,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Source guild utilities
 source "${SCRIPT_DIR}/lib/guild-utils.sh"
 
+# tsx runner for guild-db.ts (better-sqlite3 requires Node, not bun)
+GUILD_TSX="${SCRIPT_DIR}/lib/node_modules/.bin/tsx"
+
 # Load environment variables from .env file
 guild_load_env "${SCRIPT_DIR}/.env"
 
@@ -451,14 +454,15 @@ init_database() {
     fi
 
     # Initialize database (idempotent)
-    npx tsx "$guild_db" init >/dev/null 2>&1 || {
-        echo "${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} Failed to initialize guild database"
+    # Suppress stdout (progress noise) but let stderr through for diagnostics
+    if ! "$GUILD_TSX" "$guild_db" init >/dev/null; then
+        echo "${FAIL_COLOR}${XMARK} ERROR:${RESET_COLOR} Failed to initialize guild database" >&2
         return 1
-    }
+    fi
 
     # Register schemas for all discovered tools
     for tool in "${tools_list[@]}"; do
-        npx tsx "$guild_db" register "$SCRIPT_DIR/$tool" >/dev/null 2>&1 || true
+        "$GUILD_TSX" "$guild_db" register "$SCRIPT_DIR/$tool" >/dev/null || true
     done
 
     return 0
@@ -501,7 +505,7 @@ start_conclave_session() {
             dryrun: $dryrun
         }' 2>/dev/null)
 
-    npx tsx "$guild_db" start-conclave "$SIGIL" "$config_json" >/dev/null 2>&1
+    "$GUILD_TSX" "$guild_db" start-conclave "$SIGIL" "$config_json" >/dev/null
 }
 
 # End conclave session in database
@@ -522,7 +526,7 @@ end_conclave_session() {
             total_files_scanned: $total_files
         }' 2>/dev/null)
 
-    npx tsx "$guild_db" end-conclave "$SIGIL" "$stats_json" >/dev/null 2>&1
+    "$GUILD_TSX" "$guild_db" end-conclave "$SIGIL" "$stats_json" >/dev/null
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1106,7 +1110,7 @@ rm -f "$parallel_joblog"
 
 # Query summary stats from database (files scanned and issues per member)
 # This is more reliable than tracking in-process since workers run in parallel
-stats_json=$(npx tsx "$SCRIPT_DIR/lib/guild-db.ts" query-stats "$SIGIL" 2>/dev/null || echo '{}')
+stats_json=$("$GUILD_TSX" "$SCRIPT_DIR/lib/guild-db.ts" query-stats "$SIGIL" 2>/dev/null || echo '{}')
 total_files_scanned=$(echo "$stats_json" | jq -r '.total_files_scanned // 0')
 
 # Populate tool_stats from database results and calculate total issues

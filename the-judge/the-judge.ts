@@ -1,4 +1,4 @@
-#!/usr/bin/env -S npx tsx
+#!/usr/bin/env bun
 
 import { readFileSync, existsSync, lstatSync, readlinkSync } from "fs";
 import { argv, exit, stderr, stdout, env } from "process";
@@ -447,6 +447,10 @@ function getGuildDbPath(): string {
   return join(dirname(new URL(import.meta.url).pathname), '..', 'lib', 'guild-db.ts');
 }
 
+function getGuildTsxPath(): string {
+  return join(dirname(new URL(import.meta.url).pathname), '..', 'lib', 'node_modules', '.bin', 'tsx');
+}
+
 function extractRepoFromPath(filepath: string): string {
   const match = filepath.match(/\.repos\/([^/]+\/[^/]+)\//);
   return match ? match[1] : "unknown";
@@ -463,6 +467,7 @@ interface RecordDataInput {
 
 function recordData(sigil: string, data: RecordDataInput): void {
   const guildDb = getGuildDbPath();
+  const guildTsx = getGuildTsxPath();
   if (!existsSync(guildDb)) return;
 
   // Build scan data
@@ -493,7 +498,7 @@ function recordData(sigil: string, data: RecordDataInput): void {
   try {
     const jsonData = JSON.stringify(insertData);
     execSync(
-      `npx tsx "${guildDb}" insert-with-findings the-judge -`,
+      `${guildTsx} "${guildDb}" insert-with-findings the-judge -`,
       { input: jsonData, stdio: ['pipe', 'pipe', 'pipe'], encoding: 'utf-8' }
     );
   } catch {
@@ -524,19 +529,20 @@ interface FindingRecord {
 
 function generateReport(sigil: string): string {
   const guildDb = getGuildDbPath();
+  const guildTsx = getGuildTsxPath();
   if (!existsSync(guildDb)) return "";
 
   try {
     // Query scans
     const scansResult = execSync(
-      `npx tsx "${guildDb}" query-scans the-judge '${sigil}'`,
+      `${guildTsx} "${guildDb}" query-scans the-judge '${sigil}'`,
       { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
     );
     const scans: ScanRecord[] = JSON.parse(scansResult.trim());
 
     // Query findings
     const findingsResult = execSync(
-      `npx tsx "${guildDb}" query-findings the-judge '${sigil}'`,
+      `${guildTsx} "${guildDb}" query-findings the-judge '${sigil}'`,
       { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
     );
     const findings: FindingRecord[] = JSON.parse(findingsResult.trim());

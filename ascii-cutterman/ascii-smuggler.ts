@@ -1,4 +1,4 @@
-#!/usr/bin/env -S npx tsx
+#!/usr/bin/env bun
 
 /**
  * ASCII Smuggler - Creates test cases for ASCII Cutterman

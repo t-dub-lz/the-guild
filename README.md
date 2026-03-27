@@ -6,23 +6,32 @@ various specialized scanning tools ("Guild Members") to them.
 ## Quick Start
 
 ```bash
+# Check system dependencies
+make setup
+
+# Install project dependencies (lib + guild-hall)
+make install
+
 # Scan all your own GitHub repos (default)
-./conclave.zsh
+make conclave
 
 # Scan all repos in an org
-./conclave.zsh -o myorg
+make conclave ARGS="-o myorg"
 
 # Scan specific repos
-./conclave.zsh org/repo1,org/repo2
+make conclave ARGS="org/repo1,org/repo2"
 
 # Scan with 20 parallel jobs
-./conclave.zsh -o myorg -j 20
+make conclave ARGS="-o myorg -j 20"
+
+# Launch the Guild Hall TUI
+make hall
 ```
 
 ## Usage
 
 ```
-conclave.zsh [OPTIONS] [repo1,repo2,...]
+conclave.sh [OPTIONS] [repo1,repo2,...]
 
 Options:
   -o <org>      Organization name (default: your GitHub user)
@@ -31,6 +40,7 @@ Options:
   -a            Scan all text files (overrides per-tool config)
   -s            Strict mode (passed to tools that support it)
   -S            Super strict mode
+  -n            Dry-run / training mode (counts files only)
   -h, --help    Show help
 
 Arguments:
@@ -46,12 +56,12 @@ Each subdirectory is a "Guild Member" - a scanning tool. The convention:
 
 ```
 tool-name/
-  tool-name.sh   # or .ts, .py, .js, .zsh - executable with same name as folder
+  tool-name.sh   # or .ts, .py, .js - executable with same name as folder
   config.jsonc   # tool configuration in JSONC format
 ```
 
 The main executable must have the same name as its containing folder. Extensions
-supported: `.sh`, `.zsh`, `.ts`, `.py`, `.js`, or no extension.
+supported: `.sh`, `.ts`, `.py`, `.js`, or no extension.
 
 ### Tool Config (config.jsonc)
 
@@ -72,6 +82,7 @@ Each tool requires a `config.jsonc` file:
 | `description` | Brief description of the tool |
 | `patterns` | Array of glob patterns for files to scan |
 | `scanAllText` | If `true`, scans all text files (ignores patterns) |
+| `repositoryScope` | If `true`, operates per-repo instead of per-file |
 
 ### Tool Interface
 
@@ -113,12 +124,35 @@ in text files. Useful for finding:
 
 **Patterns**: `*.md`, `*.txt`
 
+### Catburglar
+
+Analyzes GitHub PRs for Snyk check failures. Operates at the repository
+level via GitHub API calls to identify PRs blocked by failing security checks.
+
+**Scope**: Repository-level (no file patterns)
+
 ### Secretary
 
 Flags files exceeding 5,000 lines of code. Useful for identifying overly
 large files that may need refactoring.
 
 **Patterns**: All text files (`scanAllText: true`)
+
+### Sentinel
+
+Runs Snyk vulnerability scans (SCA and optionally SAST) on repositories.
+Reports critical, high, medium, and low severity vulnerabilities with
+upgrade path information.
+
+**Scope**: Repository-level (no file patterns)
+
+### The Judge
+
+Analyzes AI agent instruction files (CLAUDE.md, .cursorrules, AGENTS.md,
+copilot-instructions.md, etc.) for security issues, verbosity, and clarity
+using OpenAI. Covers instruction files for all major AI coding assistants.
+
+**Patterns**: AI agent instruction files across all major tools
 
 ## Adding a New Tool
 
@@ -150,10 +184,14 @@ large files that may need refactoring.
 
 ## Dependencies
 
-- `zsh` - Shell interpreter
+- `bash` - Shell interpreter
+- `bun` - TypeScript runtime and package manager
 - `gh` - GitHub CLI (for repo listing and cloning)
-- `jq` or `python3` - For parsing config.jsonc
-- Tool-specific dependencies (e.g., `bun` for TypeScript tools)
+- `jq` - JSON processor (for parsing config.jsonc)
+- `parallel` - GNU Parallel (for concurrent repo processing)
+- `bc` - Calculator (for parallelism heuristics)
+
+Run `make setup` to verify all dependencies are present.
 
 ## Guild Hall (TUI)
 
@@ -162,13 +200,11 @@ Guild Hall provides an interactive terminal interface for The Guild.
 ### Quick Start
 
 ```bash
-# Install dependencies
-just install-hall
+# Install all dependencies
+make install
 
 # Launch TUI
-just hall
-# or directly:
-./guild-hall/bin/guild-hall
+make hall
 ```
 
 ### Features

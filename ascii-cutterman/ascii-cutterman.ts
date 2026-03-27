@@ -1,4 +1,4 @@
-#!/usr/bin/env -S npx tsx
+#!/usr/bin/env bun
 
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { argv, exit, stderr, stdout } from "process";
@@ -968,6 +968,10 @@ function getGuildDbPath(): string {
   return join(dirname(new URL(import.meta.url).pathname), '..', 'lib', 'guild-db.ts');
 }
 
+function getGuildTsxPath(): string {
+  return join(dirname(new URL(import.meta.url).pathname), '..', 'lib', 'node_modules', '.bin', 'tsx');
+}
+
 function extractRepoFromPath(filepath: string): string {
   const match = filepath.match(/\.repos\/([^/]+\/[^/]+)\//);
   return match ? match[1] : "unknown";
@@ -983,6 +987,7 @@ interface RecordDataInput {
 
 function recordData(sigil: string, filepath: string, data: RecordDataInput): void {
   const guildDb = getGuildDbPath();
+  const guildTsx = getGuildTsxPath();
   if (!existsSync(guildDb)) return;
 
   const repo = extractRepoFromPath(filepath);
@@ -1014,7 +1019,7 @@ function recordData(sigil: string, filepath: string, data: RecordDataInput): voi
     // Use stdin to avoid shell quoting issues with special characters in hidden_text
     const jsonData = JSON.stringify(insertData);
     execSync(
-      `npx tsx "${guildDb}" insert-with-findings ascii-cutterman -`,
+      `${guildTsx} "${guildDb}" insert-with-findings ascii-cutterman -`,
       { input: jsonData, stdio: ['pipe', 'pipe', 'pipe'], encoding: 'utf-8' }
     );
   } catch {
@@ -1024,13 +1029,14 @@ function recordData(sigil: string, filepath: string, data: RecordDataInput): voi
 
 function generateReport(sigil: string): string {
   const guildDb = getGuildDbPath();
+  const guildTsx = getGuildTsxPath();
   if (!existsSync(guildDb)) return "";
 
   try {
     // Query scans for this sigil
     // Note: maxBuffer increased because large orgs can have thousands of scan records
     const scansResult = execSync(
-      `npx tsx "${guildDb}" query-scans ascii-cutterman '${sigil}'`,
+      `${guildTsx} "${guildDb}" query-scans ascii-cutterman '${sigil}'`,
       { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 50 * 1024 * 1024 }
     );
 
