@@ -57,11 +57,8 @@ check_snyk_auth() {
     fi
 
     # No authentication found
-    guild_error "Snyk CLI not authenticated"
-    if [[ "$GUILD_SILENT" != true ]]; then
-        printf "Run 'snyk auth' to authenticate with Snyk\n" >&2
-    fi
-    exit 2
+    guild_warn "Snyk CLI not authenticated — run 'snyk auth' to enable"
+    return 1
 }
 
 # Run SCA scan (snyk test) with optional spinner
@@ -427,11 +424,17 @@ main() {
         guild_exit_error "No repository path provided"
     fi
 
-    # Check dependencies EARLY for fast fail
-    guild_check_commands "snyk" "jq"
+    # Check dependencies - skip gracefully if snyk not available
+    if ! command -v snyk &>/dev/null; then
+        guild_warn "Snyk CLI not installed — skipping"
+        exit 0
+    fi
+    guild_check_commands "jq"
 
-    # Check Snyk authentication
-    check_snyk_auth
+    # Check Snyk authentication - skip gracefully if not authed
+    if ! check_snyk_auth; then
+        exit 0
+    fi
 
     # Create temp directory for this analysis
     guild_create_temp_dir
