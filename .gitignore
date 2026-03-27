@@ -1,4 +1,4 @@
-# Repository cache - managed by conclave.zsh
+# Repository cache - managed by conclave
 .repos/*
 
 # Node modules in members
@@ -6,3 +6,6 @@
 
 # Environment variables (secrets)
 .env
+
+# Worktrees
+.worktrees/

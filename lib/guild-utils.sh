@@ -74,6 +74,7 @@ GUILD_STRICTNESS=""
 GUILD_TOOL_NAME=""
 GUILD_SCRIPT_DIR=""
 GUILD_DB=""
+GUILD_TSX=""
 
 # Temp directory (managed by cleanup)
 GUILD_TEMP_DIR=""
@@ -91,6 +92,7 @@ guild_init() {
     GUILD_TOOL_NAME="$tool_name"
     GUILD_SCRIPT_DIR="$script_dir"
     GUILD_DB="${script_dir}/../lib/guild-db.ts"
+    GUILD_TSX="${script_dir}/../lib/node_modules/.bin/tsx"
 
     # Set up cleanup trap
     guild_cleanup_setup
@@ -291,7 +293,7 @@ guild_record_scan() {
     local insert_data
     insert_data=$(printf '{"scan":%s,"findings":%s}' "$scan_json" "$findings_json")
 
-    npx tsx "$GUILD_DB" insert-with-findings "$GUILD_TOOL_NAME" - <<< "$insert_data" >/dev/null 2>&1 || true
+    "$GUILD_TSX" "$GUILD_DB" insert-with-findings "$GUILD_TOOL_NAME" - <<< "$insert_data" >/dev/null || true
 }
 
 # Retry database operations with exponential backoff

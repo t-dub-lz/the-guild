@@ -125,7 +125,7 @@ record_data() {
 {"sigil":"${SIGIL}","repo":"${repo}","filepath":"${file}","file_size":${file_size},"line_count":${line_count},"over_threshold":${over_threshold}}
 EOF
 )
-        npx tsx "$GUILD_DB" insert-scan secretary "$json_data" >/dev/null 2>&1 || true
+        "$GUILD_TSX" "$GUILD_DB" insert-scan secretary "$json_data" >/dev/null || true
     fi
 }
 
@@ -137,7 +137,7 @@ if [[ "$REPORT_MODE" == true ]]; then
     fi
 
     # Query scans from database
-    scans_json=$(npx tsx "$GUILD_DB" query-scans secretary "$SIGIL" 2>/dev/null)
+    scans_json=$("$GUILD_TSX" "$GUILD_DB" query-scans secretary "$SIGIL" 2>/dev/null)
     if [[ -z "$scans_json" || "$scans_json" == "[]" ]]; then
         exit 0
     fi

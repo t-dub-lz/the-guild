@@ -340,7 +340,7 @@ generate_report() {
 
     # Query scans from database
     local scans_json
-    scans_json=$(npx tsx "$GUILD_DB" query-scans sentinel "$sigil" 2>/dev/null || echo "[]")
+    scans_json=$("$GUILD_TSX" "$GUILD_DB" query-scans sentinel "$sigil" 2>/dev/null || echo "[]")
 
     if [[ "$scans_json" == "[]" ]]; then
         echo "No data collected for this session."
@@ -349,7 +349,7 @@ generate_report() {
 
     # Query findings from database
     local findings_json
-    findings_json=$(npx tsx "$GUILD_DB" query-findings sentinel "$sigil" 2>/dev/null || echo "[]")
+    findings_json=$("$GUILD_TSX" "$GUILD_DB" query-findings sentinel "$sigil" 2>/dev/null || echo "[]")
 
     # Aggregate statistics
     local total_repos repos_with_vulns total_vulns
