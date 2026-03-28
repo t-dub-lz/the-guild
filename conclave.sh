@@ -892,12 +892,11 @@ process_single_repo() {
                 continue
             fi
 
-            local temp_results
-            temp_results=$(mktemp)
             local exit_code=0
 
             # Run tool in background with spinner, with timeout for robustness
-            (timeout "$MEMBER_TIMEOUT" "$tool_exe" $STRICTNESS_FLAG -g "$SIGIL" -nn "$repo_path" > /dev/null 2>&1; echo $? > "$temp_results") &
+            # Capture exit code directly from wait (no temp file race condition)
+            timeout "$MEMBER_TIMEOUT" "$tool_exe" $STRICTNESS_FLAG -g "$SIGIL" -nn "$repo_path" > /dev/null 2>&1 &
             local tool_pid=$!
 
             while kill -0 "$tool_pid" 2>/dev/null; do
@@ -905,17 +904,8 @@ process_single_repo() {
                 sleep 0.1
             done
 
-            wait "$tool_pid" || true
+            wait "$tool_pid" && exit_code=0 || exit_code=$?
             guild_clear_spinner
-
-            # Small delay to ensure file system sync (prevents race condition)
-            sleep 0.1
-
-            exit_code=$(cat "$temp_results" 2>/dev/null || echo "2")
-            # Handle empty file (timing issue) - treat as error, not clean
-            # Bash treats empty string as 0 in -eq comparison, which would falsely show "Clean"
-            [[ -z "$exit_code" ]] && exit_code="2"
-            rm -f "$temp_results"
 
             # Handle timeout case (exit code 124 from timeout command)
             if [[ "$exit_code" -eq 124 ]]; then
