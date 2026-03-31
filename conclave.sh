@@ -420,15 +420,19 @@ find_files_for_tool() {
         fi
 
         # Build find command with patterns
+        # Patterns with "/" need -path (with */ prefix), simple names use -name
         local find_args=()
         local first=true
         for pattern in "${patterns[@]}"; do
-            if [[ "$first" == true ]]; then
-                find_args+=(-name "$pattern")
-                first=false
-            else
-                find_args+=(-o -name "$pattern")
+            if [[ "$first" != true ]]; then
+                find_args+=(-o)
             fi
+            if [[ "$pattern" == */* ]]; then
+                find_args+=(-path "*/$pattern")
+            else
+                find_args+=(-name "$pattern")
+            fi
+            first=false
         done
 
         while IFS= read -r -d '' file; do
