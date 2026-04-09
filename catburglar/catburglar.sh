@@ -59,6 +59,7 @@ query($endCursor: String) {
         number
         title
         url
+        author { login }
         commits(last:1) {
           nodes {
             commit {
@@ -129,15 +130,18 @@ analyze_single_repo() {
     # Combine and get unique failing PRs count
     all_failures=$(echo "$failing_status $failing_checkruns" | jq -s 'add // [] | [.[].pr_number] | unique | length' 2>/dev/null || echo "0")
 
-    # Find Snyk-specific failures
+    # Find Snyk-specific failures, excluding PRs authored by Snyk itself
+    # Snyk's remediation PRs (authored by snyk-io) failing their own checks is noise
     local snyk_status snyk_checkruns snyk_failures snyk_details
     snyk_status=$(jq -s '[.[] | .data.repository.pullRequests.nodes[]? |
+      select(.author.login == null or (.author.login | ascii_downcase | contains("snyk") | not)) |
       . as $pr |
       .commits.nodes[0]?.commit.statusCheckRollup?.contexts.nodes[]? |
       select(.context != null and (.context | ascii_downcase | contains("snyk")) and .state != "SUCCESS") |
       {pr_number: $pr.number, title: $pr.title, url: $pr.url, check: .context, state: .state}]' "$data_file" 2>/dev/null || echo "[]")
 
     snyk_checkruns=$(jq -s '[.[] | .data.repository.pullRequests.nodes[]? |
+      select(.author.login == null or (.author.login | ascii_downcase | contains("snyk") | not)) |
       . as $pr |
       .commits.nodes[0]?.commit.statusCheckRollup?.contexts.nodes[]? |
       select(.name != null and (.name | ascii_downcase | contains("snyk")) and .conclusion != null and .conclusion != "SUCCESS" and .conclusion != "SKIPPED") |
