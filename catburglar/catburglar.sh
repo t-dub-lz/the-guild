@@ -60,6 +60,7 @@ query($endCursor: String) {
         title
         url
         author { login }
+        isDraft
         commits(last:1) {
           nodes {
             commit {
@@ -134,6 +135,7 @@ analyze_single_repo() {
     # Snyk's remediation PRs (authored by snyk-io) failing their own checks is noise
     local snyk_status snyk_checkruns snyk_failures snyk_details
     snyk_status=$(jq -s '[.[] | .data.repository.pullRequests.nodes[]? |
+      select(.isDraft != true) |
       select(.author.login == null or (.author.login | ascii_downcase | contains("snyk") | not)) |
       . as $pr |
       .commits.nodes[0]?.commit.statusCheckRollup?.contexts.nodes[]? |
@@ -141,6 +143,7 @@ analyze_single_repo() {
       {pr_number: $pr.number, title: $pr.title, url: $pr.url, check: .context, state: .state}]' "$data_file" 2>/dev/null || echo "[]")
 
     snyk_checkruns=$(jq -s '[.[] | .data.repository.pullRequests.nodes[]? |
+      select(.isDraft != true) |
       select(.author.login == null or (.author.login | ascii_downcase | contains("snyk") | not)) |
       . as $pr |
       .commits.nodes[0]?.commit.statusCheckRollup?.contexts.nodes[]? |
